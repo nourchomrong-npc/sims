@@ -1,0 +1,235 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #172b4d; background: #f5f7fb; font-synthesis: none; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+* { scrollbar-color: #94a3b8 #eef2f7; scrollbar-width: thin; }
+*::-webkit-scrollbar { width: 12px; height: 12px; }
+*::-webkit-scrollbar-track { border-radius: 999px; background: #eef2f7; }
+*::-webkit-scrollbar-thumb { border: 3px solid #eef2f7; border-radius: 999px; background: #94a3b8; }
+*::-webkit-scrollbar-thumb:hover { background: #64748b; }
+*::-webkit-scrollbar-corner { background: #eef2f7; }
+button, input, select, textarea { font: inherit; }
+button { cursor: pointer; }
+:root { --control-height: 2.75rem; }
+button:not([role="option"]):not([role="menuitem"]):not(.schedule-grid-lesson):not(.mobile-nav-backdrop),
+input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+select { box-sizing: border-box; height: var(--control-height) !important; min-height: var(--control-height) !important; }
+button:not([role="option"]):not([role="menuitem"]):not(.schedule-grid-lesson):not(.mobile-nav-backdrop) { padding-top: .5rem; padding-bottom: .5rem; }
+input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+select { padding-top: .5rem; padding-bottom: .5rem; line-height: 1.25; }
+button.sims-action-menu, button.sims-action-trigger { height: 2.5rem; min-height: 2.5rem; }
+.sims-panel { background: #fff; border: 1px solid #dbe3ee; border-radius: .75rem; padding: 1.125rem; box-shadow: 0 1px 2px rgb(15 23 42 / 4%); }
+.sims-toolbar { min-width: 0; background: #fff; border: 1px solid #dbe3ee; border-radius: .75rem; padding: .875rem; }
+.sims-toolbar > * { min-width: 0; }
+.sims-toolbar label { min-width: 0; line-height: 1.4; }
+.sims-toolbar input:not([type="hidden"]), .sims-toolbar select { min-height: 2.65rem; border-radius: .55rem; }
+.sims-filter-grid { display: grid; width: 100%; flex: 1 0 100%; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); align-items: end; gap: .875rem; min-width: 0; }
+.sims-filter-grid > * { min-width: 0; }
+.sims-filter-grid input:not([type="hidden"]), .sims-filter-grid select { width: 100%; }
+.sims-filter-grid > button { justify-self: start; width: auto; min-height: 2.65rem; }
+.sims-filter-grid--compact { grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 16rem)); align-items: start; }
+.sims-student-filter-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); }
+.sims-student-filter-grid > label:first-child { grid-column: span 2; }
+.sims-record-filter-grid > label:first-child { grid-column: span 2; }
+.sims-filter-actions { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: .875rem; }
+.sims-filter-actions > * { min-width: 0; }
+.sims-filter-actions input:not([type="hidden"]) { width: 100%; }
+.sims-action-menu { display: inline-flex; min-width: 2.5rem; min-height: 2.5rem; align-items: center; justify-content: center; }
+.sims-action-trigger { display: inline-flex; min-width: 2.5rem; min-height: 2.5rem; align-items: center; justify-content: center; }
+.sims-table:has(.sims-action-menu) th:last-child { position: sticky; right: 0; z-index: 2; background: #f8fafc; }
+.sims-table td:has(.sims-action-menu) { position: sticky; right: 0; z-index: 1; background: #fff; box-shadow: -.5rem 0 .75rem -.75rem rgb(15 23 42 / 35%); }
+.sims-table-panel { max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; border: 1px solid #dbe3ee; border-radius: .75rem; background: #fff; }
+.sims-table { width: max-content; min-width: 100%; table-layout: auto; }
+.sims-table th, .sims-table td { vertical-align: middle; }
+.sims-table thead { background: #f8fafc; }
+.schedule-grid-shell { min-width: 0; }
+.schedule-grid-scroll { overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; }
+.schedule-grid-sticky-header { position: sticky; top: 76px; z-index: 20; overflow: clip; background: #fff; }
+.schedule-grid-screen-header { display: none; }
+.schedule-drop-target { background: #dbeafe !important; box-shadow: inset 0 0 0 2px #2563eb; }
+.schedule-drop-conflict { background: #fee2e2 !important; box-shadow: inset 0 0 0 2px #dc2626; }
+.schedule-lesson-editable { cursor: grab; border-style: dashed; }
+.schedule-lesson-editable:active { cursor: grabbing; }
+.schedule-grid { width: 100%; table-layout: fixed; }
+.schedule-grid th, .schedule-grid td { vertical-align: top; }
+.schedule-grid-time-heading { background: #f8fafc; }
+.schedule-grid-lesson { display: block; width: 100%; min-width: 0; border: 1px solid; border-left-width: 4px; border-radius: .5rem; padding: .65rem; text-align: left; overflow-wrap: anywhere; }
+button.schedule-grid-lesson { height: auto !important; min-height: 0 !important; }
+.schedule-lesson-blue { border-color: #93c5fd; background: #eff6ff; color: #172554; }
+.schedule-lesson-green { border-color: #86efac; background: #f0fdf4; color: #14532d; }
+.schedule-lesson-purple { border-color: #c4b5fd; background: #f5f3ff; color: #3b0764; }
+.schedule-lesson-amber { border-color: #fcd34d; background: #fffbeb; color: #78350f; }
+.schedule-lesson-rose { border-color: #fda4af; background: #fff1f2; color: #881337; }
+.schedule-grid-subject { display: block; margin-bottom: .45rem; border-bottom: 1px solid currentColor; padding-bottom: .3rem; font-size: .9rem; font-weight: 750; line-height: 1.25; }
+.schedule-grid-detail { display: grid; grid-template-columns: 3.8rem minmax(0, 1fr); gap: .35rem; padding-top: .18rem; font-size: .78rem; line-height: 1.35; }
+.schedule-grid-detail b { color: #334155; font-weight: 700; }
+.schedule-grid-detail span { min-width: 0; overflow-wrap: anywhere; }
+.schedule-grid-inactive { display: inline-block; margin-top: .35rem; border-radius: 999px; background: #e2e8f0; padding: .1rem .45rem; color: #334155; font-size: .68rem; font-weight: 700; }
+.schedule-day-monday { background: #ffedd5; color: #7c2d12; }
+.schedule-day-tuesday { background: #fee2e2; color: #7f1d1d; }
+.schedule-day-wednesday { background: #fce7f3; color: #831843; }
+.schedule-day-thursday { background: #f3e8ff; color: #581c87; }
+.schedule-day-friday { background: #e0e7ff; color: #312e81; }
+.schedule-day-saturday { background: #dcfce7; color: #14532d; }
+.schedule-day-sunday { background: #cffafe; color: #164e63; }
+.sims-table th { color: #475569; font-weight: 600; }
+.sims-table thead th:first-child { border-top-left-radius: .7rem; }
+.sims-table thead th:last-child { border-top-right-radius: .7rem; }
+.sims-panel.sims-panel--metric { border-left: 4px solid #3b82f6; padding: 1rem; }
+.primary-action { background-color: #1d4ed8 !important; color: #fff !important; border: 1px solid #1d4ed8; }
+.primary-action:hover:not(:disabled) { background-color: #1e40af !important; border-color: #1e40af; }
+.primary-action:disabled { background-color: #64748b !important; border-color: #64748b; color: #fff !important; }
+button:disabled { cursor: not-allowed; }
+select:focus-visible, input:focus-visible, textarea:focus-visible, button:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+.print-only { display: none !important; }
+@media (max-width: 640px) {
+  .schedule-grid-sticky-header { top: 100px; }
+  .sims-table th, .sims-table td { padding-left: .7rem; padding-right: .7rem; }
+  .sims-toolbar { padding: .75rem; }
+  .sims-toolbar input:not([type="hidden"]), .sims-toolbar select { max-width: 100%; }
+  .sims-student-filter-grid, .sims-filter-grid--compact { grid-template-columns: minmax(0, 1fr); }
+  .sims-student-filter-grid > label:first-child { grid-column: auto; }
+  .sims-record-filter-grid > label:first-child { grid-column: auto; }
+  .sims-filter-actions { align-items: stretch; flex-direction: column; }
+  .sims-filter-actions > div { width: 100%; }
+  .sims-filter-actions > div > button { flex: 1 1 auto; }
+  .sims-filter-grid > button { justify-self: stretch; width: 100%; }
+}
+@media print {
+  @page { size: A4 portrait; margin: 0; }
+  @page dashboard { size: A4 portrait; margin: 0; }
+  @page schedule { size: A4 landscape; margin: 0; }
+  @page misreport { size: A4 portrait; margin: 0; }
+  @page decision-support { size: A4 portrait; margin: 0; }
+  @page academic-results { size: A4 portrait; margin: 0; }
+  @page record-list { size: A4 portrait; margin: 0; }
+  html, body, #root { height: auto !important; min-height: 0 !important; overflow: visible !important; }
+  .min-h-screen { height: auto !important; min-height: 0 !important; }
+  .no-print { display: none !important; }
+  .print-only { display: block !important; }
+  body[data-print-target^="settings-"] .settings-print-output { display: none !important; }
+  body[data-print-target="settings-years"] .settings-print-years,
+  body[data-print-target="settings-terms"] .settings-print-terms,
+  body[data-print-target="settings-scales"] .settings-print-scales { display: block !important; }
+  .print-content { padding: 0 !important; }
+  .print-content > main { padding: 10mm !important; }
+  .print-page-schedule > main { padding: 5mm !important; }
+  .print-content, .print-content main { height: auto !important; min-height: 0 !important; overflow: visible !important; }
+  .print-page-mis-report { page: misreport; }
+  .print-page-decision-support { page: decision-support; }
+  .print-page-academic-results { page: academic-results; }
+  .print-page-record-list { page: record-list; }
+  .dashboard-screen { display: none !important; }
+  .dashboard-print { page: dashboard; color: #172b4d; font-size: 9pt; }
+  .dashboard-print-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; border-bottom: 2px solid #1d4ed8; padding-bottom: .5rem; }
+  .dashboard-print-kicker { margin: 0; color: #475569; font-size: 8pt; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+  .dashboard-print-header h1 { margin: .2rem 0 0; font-size: 20pt; font-weight: 700; }
+  .dashboard-print-meta { display: grid; gap: .2rem; color: #475569; font-size: 8pt; text-align: right; }
+  .dashboard-print-meta strong { color: #172b4d; }
+  .dashboard-print-filters { display: flex; flex-wrap: wrap; gap: .25rem 1rem; margin: .55rem 0; color: #475569; font-size: 8pt; }
+  .dashboard-print-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .45rem; }
+  .dashboard-print-card { display: grid; gap: .1rem; border: 1px solid #cbd5e1; padding: .45rem .6rem; break-inside: avoid; }
+  .dashboard-print-card > span { color: #475569; font-size: 8pt; font-weight: 600; }
+  .dashboard-print-card > strong { color: #172b4d; font-size: 16pt; line-height: 1.15; }
+  .dashboard-print-card > small { color: #64748b; font-size: 7pt; }
+  .dashboard-print-tables { display: grid; grid-template-columns: 1fr; align-items: start; gap: .6rem; margin-top: .6rem; }
+  .dashboard-print-tables > div { min-width: 0; break-inside: avoid; }
+  .dashboard-print-tables h2 { margin: 0 0 .25rem; font-size: 9pt; font-weight: 700; }
+  .dashboard-print-tables p { margin: .35rem 0; color: #64748b; font-size: 8pt; }
+  .dashboard-print-tables table { width: 100%; border-collapse: collapse; table-layout: auto; font-size: 8pt; }
+  .dashboard-print-tables th, .dashboard-print-tables td { border: 1px solid #cbd5e1; padding: .2rem .35rem; text-align: left; }
+  .dashboard-print-tables th { background: #eff6ff !important; color: #1e3a8a; font-weight: 700; print-color-adjust: exact; }
+  .fixed.inset-0.z-50, [role="menu"] { display: none !important; }
+  .sims-panel, .sims-toolbar, .sims-table-panel { border-radius: 0; box-shadow: none; }
+  body { min-width: 0; background: white; color: black; }
+  main { max-width: none !important; padding: 0 !important; }
+  .print-table { width: 100%; border-collapse: collapse; table-layout: auto; font-size: 8pt; }
+  .print-table th, .print-table td { border: 1px solid #94a3b8; padding: 4px 6px; text-align: left; overflow-wrap: anywhere; }
+  .print-other-column { width: 15%; }
+  .print-table thead { background: #e2e8f0 !important; print-color-adjust: exact; }
+  .print-table thead { display: table-header-group; }
+  .print-table tr { break-inside: avoid; }
+  .results-print { color: #172b4d; font-size: 9pt; }
+  .results-print h1 { margin: 0 0 .35rem; font-size: 18pt; font-weight: 700; }
+  .results-print > p { margin: 0 0 .6rem; font-size: 8pt; }
+  .results-print .print-table { font-size: 8pt; }
+  .record-list-print, .trash-print { color: #172b4d; font-size: 9pt; }
+  .record-list-print h1, .trash-print h1 { margin: 0 0 .35rem; font-size: 18pt; font-weight: 700; }
+  .record-list-print > p, .trash-print > header p { margin: 0 0 .6rem; font-size: 8pt; }
+  .record-list-print { break-after: auto !important; page-break-after: auto !important; }
+  .record-list-print .print-table { table-layout: fixed; font-size: 7pt; }
+  .record-list-print .print-table th, .record-list-print .print-table td { padding: 3px 4px; }
+  .teacher-list-print .print-table th:nth-child(1) { width: 7%; }
+  .teacher-list-print .print-table th:nth-child(2) { width: 12%; }
+  .teacher-list-print .print-table th:nth-child(3) { width: 16%; }
+  .teacher-list-print .print-table th:nth-child(4) { width: 10%; }
+  .teacher-list-print .print-table th:nth-child(5) { width: 8%; }
+  .teacher-list-print .print-table th:nth-child(6) { width: 27%; }
+  .teacher-list-print .print-table th:nth-child(7) { width: 10%; }
+  .teacher-list-print .print-table th:nth-child(8) { width: 10%; }
+  .mis-report-print { color: #172b4d; font-size: 9pt; }
+  .mis-report-print > header { margin-bottom: .65rem; border-bottom: 2px solid #1d4ed8; padding-bottom: .5rem; }
+  .mis-report-print > header p { margin: .15rem 0; color: #475569; font-size: 8pt; }
+  .mis-report-print > header h1 { margin: .2rem 0; color: #172b4d; font-size: 18pt; font-weight: 700; }
+  .mis-report-print .print-table { table-layout: auto; font-size: 8pt; }
+  .mis-report-print .print-table th, .mis-report-print .print-table td { overflow-wrap: anywhere; padding: 3px 5px; }
+  .mis-report-print .print-table thead { display: table-header-group; }
+  .mis-report-print .print-table tr { break-inside: avoid; }
+  .decision-support-print { color: #172b4d; font-size: 9pt; }
+  .decision-support-print > header { margin-bottom: .75rem; border-bottom: 2px solid #1d4ed8; padding-bottom: .5rem; }
+  .decision-support-print > header p { margin: .15rem 0; color: #475569; font-size: 8pt; }
+  .decision-support-print > header h1 { margin: .2rem 0; color: #172b4d; font-size: 18pt; font-weight: 700; }
+  .decision-support-print > section { margin-top: .75rem; }
+  .decision-support-print > section h2 { margin: 0 0 .35rem; font-size: 11pt; font-weight: 700; }
+  .decision-support-print .print-table { table-layout: auto; font-size: 8pt; }
+  .decision-support-print .print-table th, .decision-support-print .print-table td { overflow-wrap: anywhere; padding: 3px 5px; }
+  .decision-support-print .print-table thead { display: table-header-group; }
+  .decision-support-print .print-table tr { break-inside: avoid; }
+  .activity-print { color: #172b4d; }
+  .activity-print-table { table-layout: fixed; font-size: 9pt; }
+  .activity-print-table th, .activity-print-table td { overflow-wrap: anywhere; vertical-align: top; }
+  .activity-print-table th:nth-child(1) { width: 20%; }
+  .activity-print-table th:nth-child(2) { width: 23%; }
+  .activity-print-table th:nth-child(3) { width: 17%; }
+  .activity-print-table th:nth-child(4) { width: 15%; }
+  .activity-print-table th:nth-child(5) { width: 25%; }
+  .activity-print-table thead { display: table-header-group; }
+  .schedule-print { page: schedule; color: #172b4d; }
+  .schedule-print-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; border-bottom: 2px solid #1d4ed8; padding-bottom: .75rem; }
+  .schedule-print-header h1 { margin: .2rem 0 0; font-size: 22pt; font-weight: 700; }
+  .schedule-print-kicker { margin: 0; color: #475569; font-size: 9pt; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+  .schedule-print-meta { display: grid; gap: .25rem; text-align: right; font-size: 9pt; color: #475569; }
+  .schedule-print-meta strong { color: #172b4d; font-size: 12pt; }
+  .schedule-print-table { font-size: 9pt; }
+  .schedule-print-table th { background: #dbeafe !important; color: #1e3a8a; print-color-adjust: exact; }
+  .schedule-print-table th, .schedule-print-table td { padding: 6px 8px; }
+  .schedule-print-time { white-space: nowrap; font-weight: 600; }
+  .schedule-grid-print { overflow: visible !important; border: 1px solid #475569; border-radius: 0; }
+  .schedule-grid-sticky-header { display: none !important; }
+  .schedule-grid-screen-header { display: table-header-group !important; }
+  .schedule-grid-print-table { width: 100%; min-width: 0; table-layout: fixed; font-size: 8pt; }
+  .schedule-grid-print-table tr { break-inside: auto; }
+  .schedule-grid-print-table th, .schedule-grid-print-table td { border: 1px solid #64748b; padding: 4px; }
+  .schedule-grid-print-table thead { display: table-header-group; }
+  .schedule-grid-print-table thead th { color: #172b4d; font-size: 8pt; print-color-adjust: exact; }
+  .schedule-grid-print-table thead th { position: static; }
+  .schedule-grid-print-table .schedule-grid-time-heading { position: static; width: 12%; background: #e2e8f0 !important; color: #172b4d; font-size: 8pt; print-color-adjust: exact; }
+  .schedule-grid-print-table td { height: auto; min-width: 0; }
+  .schedule-grid-print-table .schedule-grid-lesson { border-left-width: 3px; border-radius: 2px; margin-bottom: 3px; padding: 4px; font-size: 8pt; print-color-adjust: exact; break-inside: avoid; }
+  .schedule-grid-print-table .schedule-grid-subject { margin-bottom: 2px; padding-bottom: 2px; font-size: 8.5pt; }
+  .schedule-grid-print-table .schedule-grid-detail { grid-template-columns: 2.8rem minmax(0, 1fr); gap: 2px; padding-top: 1px; font-size: 7.5pt; line-height: 1.25; }
+  .schedule-grid-print-table .schedule-grid-inactive { font-size: 7pt; }
+  .schedule-grid-print-table .schedule-day-monday,
+  .schedule-grid-print-table .schedule-day-tuesday,
+  .schedule-grid-print-table .schedule-day-wednesday,
+  .schedule-grid-print-table .schedule-day-thursday,
+  .schedule-grid-print-table .schedule-day-friday,
+  .schedule-grid-print-table .schedule-day-saturday,
+  .schedule-grid-print-table .schedule-day-sunday { print-color-adjust: exact; }
+  .schedule-print-empty { padding: 2rem; text-align: center; color: #64748b; }
+  .schedule-print-footer { margin-top: .75rem; border-top: 1px solid #cbd5e1; padding-top: .5rem; color: #64748b; font-size: 8pt; text-align: right; }
+  tr { break-inside: avoid; }
+}
