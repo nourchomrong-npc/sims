@@ -123,9 +123,11 @@ export function registerAcademicsRoutes(router, context) {
     try {
       await connection.beginTransaction();
       const [[record]] = await connection.execute(`
-        SELECT id, public_id, student_id, class_id, subject_id, schedule_id, attendance_date, status, note
-        FROM attendance_records WHERE id = ? FOR UPDATE
-      `, [id]);
+        SELECT ar.id, ar.public_id, ar.student_id, ar.class_id, ar.subject_id, ar.schedule_id,
+          ar.attendance_date, ar.status, ar.note
+        FROM attendance_records ar JOIN classes c ON c.id = ar.class_id
+        WHERE ar.id = ? AND c.academic_year_id = ? FOR UPDATE
+      `, [id, req.academicYearId || 0]);
       if (!record) throw Object.assign(new Error('Attendance record not found'), { status: 404 });
       const teacherId = await linkedTeacherId(req);
       if (teacherId) {
@@ -135,7 +137,8 @@ export function registerAcademicsRoutes(router, context) {
           JOIN subjects subject ON subject.id = assignment.subject_id AND subject.active = 1 AND subject.is_deleted = 0
           WHERE assignment.teacher_id = ? AND assignment.class_id = ? AND assignment.subject_id = ?
             AND assignment.active = 1 AND assignment.academic_year_id = c.academic_year_id
-        `, [teacherId, record.class_id, record.subject_id]);
+            AND assignment.academic_year_id = ?
+        `, [teacherId, record.class_id, record.subject_id, req.academicYearId || 0]);
         if (!assignment) {
           throw Object.assign(new Error('You are not assigned to this class and subject'), { status: 403 });
         }
@@ -156,9 +159,11 @@ export function registerAcademicsRoutes(router, context) {
         LEFT JOIN teachers teacher ON teacher.id = schedule.teacher_id
         WHERE ar.id = ?
       `, [id]);
-      await connection.execute('UPDATE attendance_records SET status = ?, recorded_by = ? WHERE id = ?', [
-        status, req.session.user.internalId, id
-      ]);
+      await connection.execute(`
+        UPDATE attendance_records SET status = ?, recorded_by = ? WHERE id = ?
+          AND EXISTS (SELECT 1 FROM classes c
+            WHERE c.id = attendance_records.class_id AND c.academic_year_id = ?)
+      `, [status, req.session.user.internalId, id, req.academicYearId || 0]);
       await logActivity(connection, req.session.user.internalId, 'updated', 'attendance_record', id, {
         changes: [{ field: 'status', label: 'Attendance Status', before: record.status, after: status }],
         student: contextRecord?.english_name || 'Unknown student',
@@ -221,20 +226,20 @@ export function registerAcademicsRoutes(router, context) {
           AND teacher.employment_status = 'Active' AND teacher.is_deleted = 0
         WHERE schedule.id = ? AND schedule.class_id = ? AND schedule.subject_id = ?
           AND schedule.active = 1 AND schedule.is_deleted = 0 AND schedule.day_of_week = ?
-          AND (? IS NULL OR schedule.teacher_id = ?) LIMIT 1
-      `, [data.schedule_id, data.class_id, data.subject_id, weekday, teacherId, teacherId]);
+          AND c.academic_year_id = ? AND (? IS NULL OR schedule.teacher_id = ?) LIMIT 1
+      `, [data.schedule_id, data.class_id, data.subject_id, weekday, req.academicYearId || 0, teacherId, teacherId]);
       if (!classSubject) {
         throw Object.assign(new Error('Choose a class schedule for the selected date and subject'), { status: 400 });
       }
       const [members] = await connection.execute(`
         SELECT DISTINCT ON (e.student_id) e.student_id, e.id AS enrollment_id, s.english_name, s.student_code
         FROM student_enrollments e JOIN students s ON s.id = e.student_id
-        WHERE e.class_id = ? AND e.current = 1
+        WHERE e.class_id = ? AND e.academic_year_id = ? AND e.current = 1
           AND (e.enrollment_type = 'Homeroom' OR (e.enrollment_type = 'Subject' AND e.subject_id = ?))
           AND s.status = 'Active' AND s.is_deleted = 0
           AND e.student_id IN (${data.records.map(() => '?').join(', ')})
         ORDER BY e.student_id, CASE WHEN e.enrollment_type = 'Subject' THEN 0 ELSE 1 END
-      `, [data.class_id, data.subject_id, ...data.records.map(row => row.student_id)]);
+      `, [data.class_id, req.academicYearId || 0, data.subject_id, ...data.records.map(row => row.student_id)]);
       if (members.length !== data.records.length) throw Object.assign(new Error('Every student must be actively enrolled in the selected class'), { status: 400 });
       const membersByStudent = new Map(members.map(member => [String(member.student_id), member]));
       const [existingRecords] = await connection.execute(`
@@ -346,12 +351,14 @@ export function registerAcademicsRoutes(router, context) {
         AND (? IS NULL OR a.class_id = ?)
         AND (? IS NULL OR a.subject_id = ?)
         AND (? IS NULL OR a.term_id = ?)
+        AND c.academic_year_id = ?
         ${teacherFilter.sql}
         ${createdRange.sql}
     `;
     const deleted = filters.status === undefined ? null : filters.status === 'In Trash';
     const params = [includeDeleted, includeDeleted, includeDeleted, deleted, deleted, search, search, search, search, search,
-      classId, classId, subjectId, subjectId, termId, termId, ...teacherFilter.params, ...createdRange.params];
+      classId, classId, subjectId, subjectId, termId, termId, req.academicYearId || 0,
+      ...teacherFilter.params, ...createdRange.params];
     const [countResult, rowsResult] = page
       ? await Promise.all([
         pool.execute(`SELECT COUNT(DISTINCT a.id) AS total ${joins} ${whereSql}`, params),
@@ -395,12 +402,15 @@ export function registerAcademicsRoutes(router, context) {
           WHERE ta.teacher_id = ? AND ta.class_id = a.class_id
             AND ta.subject_id = a.subject_id AND ta.active = 1)`
       : '';
-    const params = teacherId ? [assessmentId, teacherId] : [assessmentId];
+    const params = teacherId
+      ? [req.academicYearId || 0, assessmentId, teacherId]
+      : [req.academicYearId || 0, assessmentId];
     const [scores] = await pool.execute(`
       SELECT student.public_id AS student_id, student.student_code, student.english_name,
         score.score, score.comment
       FROM student_scores score
       JOIN assessments a ON a.id = score.assessment_id AND a.is_deleted = 0
+      JOIN classes cls ON cls.id = a.class_id AND cls.academic_year_id = ?
       JOIN students student ON student.id = score.student_id AND student.is_deleted = 0
       WHERE a.id = ? ${teacherScope}
       ORDER BY student.english_name, student.student_code
@@ -429,11 +439,12 @@ export function registerAcademicsRoutes(router, context) {
       JOIN terms term ON term.id = assessment.term_id
       JOIN classes cls ON cls.id = assessment.class_id AND cls.is_deleted = 0
       WHERE cls.id = ?
+        AND cls.academic_year_id = ?
         AND (?::bigint IS NULL OR assessment.subject_id = ?)
         AND (?::bigint IS NULL OR assessment.term_id = ?)
         ${teacherFilter.sql}
       ORDER BY student.english_name, subject.name, assessment.assessment_date, assessment.title
-    `, [classId, subjectId, subjectId, termId, termId, ...teacherFilter.params]);
+    `, [classId, req.academicYearId || 0, subjectId, subjectId, termId, termId, ...teacherFilter.params]);
     res.json(results);
   });
   router.post(apiRoutes.assessments.collection, admin, transactionalMutation(pool, async (req, res) => {
@@ -450,7 +461,8 @@ export function registerAcademicsRoutes(router, context) {
       FROM classes c JOIN terms t ON t.id = ? JOIN subjects s ON s.id = ?
       WHERE c.id = ?
     `, [data.term_id, data.subject_id, data.class_id]);
-    if (!valid || valid.academic_year_id !== valid.term_year || !valid.subject_active ||
+    if (!valid || String(valid.academic_year_id) !== String(req.academicYearId || 0) ||
+        String(valid.academic_year_id) !== String(valid.term_year) || !valid.subject_active ||
         data.assessment_date < valid.start_date || data.assessment_date > valid.end_date) {
       return res.status(400).json({ error: 'The class and term must belong to the same academic year, the subject must be active, and the assessment date must be within the term' });
     }
@@ -482,7 +494,11 @@ export function registerAcademicsRoutes(router, context) {
     const connection = await pool.getConnection();
     try {
       await connection.beginTransaction();
-      const [[assessment]] = await connection.execute('SELECT class_id, subject_id, title, maximum_score FROM assessments WHERE id = ?', [data.assessment_id]);
+      const [[assessment]] = await connection.execute(`
+        SELECT a.class_id, a.subject_id, a.title, a.maximum_score
+        FROM assessments a JOIN classes c ON c.id = a.class_id
+        WHERE a.id = ? AND c.academic_year_id = ?
+      `, [data.assessment_id, req.academicYearId || 0]);
       if (!assessment) throw Object.assign(new Error('Assessment not found'), { status: 404 });
       if (teacherId) {
         const [[assignment]] = await connection.execute(
@@ -495,11 +511,11 @@ export function registerAcademicsRoutes(router, context) {
       for (const row of data.scores) {
         const [[enrollment]] = await connection.execute(`
           SELECT id FROM student_enrollments
-          WHERE student_id = ? AND class_id = ? AND current = 1
+          WHERE student_id = ? AND class_id = ? AND academic_year_id = ? AND current = 1
             AND (enrollment_type = 'Homeroom' OR (enrollment_type = 'Subject' AND subject_id = ?))
           ORDER BY CASE WHEN enrollment_type = 'Subject' THEN 0 ELSE 1 END
           LIMIT 1
-        `, [row.student_id, assessment.class_id, assessment.subject_id]);
+        `, [row.student_id, assessment.class_id, req.academicYearId || 0, assessment.subject_id]);
         if (!enrollment) throw Object.assign(new Error('A student is not currently enrolled in the assessment class and subject'), { status: 400 });
         await connection.execute(`
           INSERT INTO student_scores (assessment_id, student_id, score, comment, entered_by, student_enrollment_id)

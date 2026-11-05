@@ -10,12 +10,13 @@ export function registerStudentsRoutes(router, context) {
         const [[visiblePhoto]] = await pool.execute(`
           SELECT 1 FROM students s
           JOIN student_enrollments enrollment ON enrollment.student_id = s.id AND enrollment.current = 1
-            AND enrollment.academic_year_id = (SELECT id FROM academic_years WHERE is_current = 1 LIMIT 1)
+            AND enrollment.academic_year_id = ?
           JOIN teacher_assignments assignment ON assignment.class_id = enrollment.class_id
             AND assignment.teacher_id = ? AND assignment.active = 1
-            AND (enrollment.enrollment_type = 'Homeroom' OR assignment.subject_id = enrollment.subject_id)
+              AND assignment.academic_year_id = enrollment.academic_year_id
+              AND (enrollment.enrollment_type = 'Homeroom' OR assignment.subject_id = enrollment.subject_id)
           WHERE s.photo_url = ? AND s.status = 'Active' AND s.is_deleted = 0
-        `, [teacherId, `/student-photos/${req.params.filename}`]);
+        `, [req.academicYearId || 0, teacherId, `/student-photos/${req.params.filename}`]);
         if (!visiblePhoto) return res.status(404).json({ error: 'Student photo not found' });
       }
       const photo = await readStudentPhoto(req.params.filename);
@@ -29,13 +30,13 @@ export function registerStudentsRoutes(router, context) {
     const { id: studentPublicId } = parse(idParam, req.params);
     const studentId = await resolvePublicId(pool, 'students', studentPublicId, 404);
     const filters = parse(z.object({ academic_year_id: publicId.optional() }), req.query);
-    let yearId;
     if (filters.academic_year_id) {
-      yearId = await resolvePublicId(pool, 'academic_years', filters.academic_year_id, 400);
-    } else {
-      const [[currentYear]] = await pool.execute('SELECT id FROM academic_years WHERE is_current = 1 LIMIT 1');
-      yearId = currentYear?.id;
+      const requestedYearId = await resolvePublicId(pool, 'academic_years', filters.academic_year_id, 400);
+      if (String(requestedYearId) !== String(req.academicYearId || 0)) {
+        return res.status(400).json({ error: 'Student timetables are limited to the selected academic year' });
+      }
     }
+    const yearId = req.academicYearId || 0;
     if (!yearId) return res.json({ student_id: studentPublicId, main_grade: null, enrollments: [] });
     const [[student]] = await pool.execute(`
       SELECT s.id, s.public_id, s.student_code, s.english_name, c.grade_level AS main_grade,
@@ -67,6 +68,7 @@ export function registerStudentsRoutes(router, context) {
           SELECT 1 FROM teacher_assignments assignment
           WHERE assignment.teacher_id = ? AND assignment.class_id = enrollment.class_id
             AND assignment.active = 1
+            AND assignment.academic_year_id = enrollment.academic_year_id
             AND (enrollment.enrollment_type = 'Homeroom' OR assignment.subject_id = enrollment.subject_id)
         ))
       ORDER BY schedule.day_of_week NULLS LAST, schedule.start_time NULLS LAST,
@@ -101,23 +103,25 @@ export function registerStudentsRoutes(router, context) {
     const status = filters.status || null;
     const gender = filters.gender || null;
     const classId = filters.class_id ? await resolvePublicId(pool, 'classes', filters.class_id, 400) : null;
+    const yearId = req.academicYearId || 0;
     const teacherFilter = teacherId ? `
       AND EXISTS (
         SELECT 1 FROM student_enrollments visible_enrollment
         JOIN teacher_assignments visible_assignment
           ON visible_assignment.class_id = visible_enrollment.class_id
           AND visible_assignment.teacher_id = ? AND visible_assignment.active = 1
+          AND visible_assignment.academic_year_id = visible_enrollment.academic_year_id
           AND (visible_enrollment.enrollment_type = 'Homeroom'
             OR visible_assignment.subject_id = visible_enrollment.subject_id)
         WHERE visible_enrollment.student_id = s.id AND visible_enrollment.current = 1
-          AND visible_enrollment.academic_year_id = (SELECT id FROM academic_years WHERE is_current = 1 LIMIT 1)
+          AND visible_enrollment.academic_year_id = ?
       )
     ` : '';
     const fromWhere = `
       FROM students s
       LEFT JOIN student_enrollments e ON e.student_id = s.id AND e.current = 1
         AND e.enrollment_type = 'Homeroom'
-        AND e.academic_year_id = (SELECT id FROM academic_years WHERE is_current = 1 LIMIT 1)
+        AND e.academic_year_id = ?
       LEFT JOIN classes c ON c.id = e.class_id AND c.is_deleted = 0
       LEFT JOIN student_photos photo ON photo.url = s.photo_url
       WHERE (s.student_code LIKE ? OR s.english_name LIKE ? OR COALESCE(s.khmer_name,'') LIKE ?)
@@ -126,13 +130,14 @@ export function registerStudentsRoutes(router, context) {
         AND (? IS NULL OR EXISTS (
           SELECT 1 FROM student_enrollments class_filter
           WHERE class_filter.student_id = s.id AND class_filter.current = 1 AND class_filter.class_id = ?
-            AND class_filter.academic_year_id = (SELECT id FROM academic_years WHERE is_current = 1 LIMIT 1)
+            AND class_filter.academic_year_id = ?
         ))
         AND (? = 1 OR s.is_deleted = 0)
         ${teacherFilter}
         ${createdRange.sql}
     `;
-    const params = [search, search, search, status, status, gender, gender, classId, classId, includeDeleted, ...(teacherId ? [teacherId] : []), ...createdRange.params];
+    const params = [yearId, search, search, search, status, status, gender, gender, classId, classId,
+      yearId, includeDeleted, ...(teacherId ? [teacherId, yearId] : []), ...createdRange.params];
     const [countResult, rowsResult] = page
       ? await Promise.all([
         pool.execute(`SELECT COUNT(DISTINCT s.id) AS total ${fromWhere}`, params),
@@ -194,23 +199,23 @@ export function registerStudentsRoutes(router, context) {
         await recordStudentPhoto(connection, ownerId, photoUrl, data.photo_title || 'Student profile photo');
       }
       if (data.class_id) {
-        const [year] = await connection.execute('SELECT id FROM academic_years WHERE is_current = 1 LIMIT 1');
-        if (!year[0]) throw Object.assign(new Error('Set a current academic year before enrolling students'), { status: 400 });
+        const yearId = req.academicYearId || 0;
+        if (!yearId) throw Object.assign(new Error('Select an academic year before enrolling students'), { status: 400 });
         if (data.status !== 'Active') throw Object.assign(new Error('Only active students can be enrolled in a class'), { status: 400 });
         const [[classInfo]] = await connection.execute(`
           SELECT c.capacity, c.academic_year_id,
             (SELECT COUNT(DISTINCT e.student_id) FROM student_enrollments e WHERE e.class_id = c.id AND e.current = 1) AS enrollment_count
           FROM classes c WHERE c.id = ? AND c.active = 1 FOR UPDATE
         `, [data.class_id]);
-        if (!classInfo || classInfo.academic_year_id !== year[0].id) {
-          throw Object.assign(new Error('Select an active class in the current academic year'), { status: 400 });
+        if (!classInfo || String(classInfo.academic_year_id) !== String(yearId)) {
+          throw Object.assign(new Error('Select an active class in the selected academic year'), { status: 400 });
         }
         if (classInfo.enrollment_count >= classInfo.capacity) {
           throw Object.assign(new Error('The selected class is at capacity'), { status: 400 });
         }
         await connection.execute(
           'INSERT INTO student_enrollments (student_id, class_id, academic_year_id, enrollment_date, current) VALUES (?, ?, ?, ?, 1)',
-          [result.insertId, data.class_id, year[0].id, data.enrollment_date]
+          [result.insertId, data.class_id, yearId, data.enrollment_date]
         );
       }
       await logActivity(connection, req.session.user.internalId, 'created', 'student', result.insertId, { student_code: data.student_code });
@@ -295,22 +300,23 @@ export function registerStudentsRoutes(router, context) {
       }
       if (data.status && data.status !== 'Active' && !Object.hasOwn(data, 'class_id')) {
         await connection.execute(
-          'UPDATE student_enrollments SET current = 0, exit_date = ? WHERE student_id = ? AND current = 1',
-          [data.enrollment_date || new Date().toISOString().slice(0, 10), id]
+          'UPDATE student_enrollments SET current = 0, exit_date = ? WHERE student_id = ? AND current = 1 AND academic_year_id = ?',
+          [data.enrollment_date || new Date().toISOString().slice(0, 10), id, req.academicYearId || 0]
         );
       }
       if (Object.hasOwn(data, 'class_id')) {
         const [current] = await connection.execute(
-          "SELECT id, class_id FROM student_enrollments WHERE student_id = ? AND current = 1 AND enrollment_type = 'Homeroom' FOR UPDATE", [id]
+          "SELECT id, class_id FROM student_enrollments WHERE student_id = ? AND academic_year_id = ? AND current = 1 AND enrollment_type = 'Homeroom' FOR UPDATE",
+          [id, req.academicYearId || 0]
         );
         if (data.class_id === null) {
           if (current.length) {
-            await connection.execute("UPDATE student_enrollments SET current = 0, exit_date = ? WHERE student_id = ? AND current = 1 AND enrollment_type = 'Homeroom'",
-              [data.enrollment_date || new Date().toISOString().slice(0, 10), id]);
+            await connection.execute("UPDATE student_enrollments SET current = 0, exit_date = ? WHERE student_id = ? AND academic_year_id = ? AND current = 1 AND enrollment_type = 'Homeroom'",
+              [data.enrollment_date || new Date().toISOString().slice(0, 10), id, req.academicYearId || 0]);
           }
         } else if (!current[0] || current[0].class_id !== data.class_id) {
-          const [year] = await connection.execute('SELECT id FROM academic_years WHERE is_current = 1 LIMIT 1');
-          if (!year[0]) throw Object.assign(new Error('Set a current academic year before managing class enrollment'), { status: 400 });
+          const yearId = req.academicYearId || 0;
+          if (!yearId) throw Object.assign(new Error('Select an academic year before managing class enrollment'), { status: 400 });
           if ((data.status || student.status) !== 'Active') {
             throw Object.assign(new Error('Only active students can be enrolled in a class'), { status: 400 });
           }
@@ -319,8 +325,8 @@ export function registerStudentsRoutes(router, context) {
               (SELECT COUNT(DISTINCT e.student_id) FROM student_enrollments e WHERE e.class_id = c.id AND e.current = 1 AND e.student_id <> ?) AS enrollment_count
             FROM classes c WHERE c.id = ? AND c.active = 1 FOR UPDATE
           `, [id, data.class_id]);
-          if (!classInfo || classInfo.academic_year_id !== year[0].id) {
-            throw Object.assign(new Error('Select an active class in the current academic year'), { status: 400 });
+          if (!classInfo || String(classInfo.academic_year_id) !== String(yearId)) {
+            throw Object.assign(new Error('Select an active class in the selected academic year'), { status: 400 });
           }
           if (classInfo.enrollment_count >= classInfo.capacity) {
             throw Object.assign(new Error('The selected class is at capacity'), { status: 400 });
@@ -334,7 +340,7 @@ export function registerStudentsRoutes(router, context) {
             VALUES (?, ?, ?, ?, 1, 'Homeroom')
             ON CONFLICT
             DO UPDATE SET enrollment_date = EXCLUDED.enrollment_date, exit_date = NULL, current = 1
-          `, [id, data.class_id, year[0].id, data.enrollment_date || new Date().toISOString().slice(0, 10)]);
+          `, [id, data.class_id, yearId, data.enrollment_date || new Date().toISOString().slice(0, 10)]);
         }
       }
       await logActivity(connection, req.session.user.internalId, 'updated', 'student', id, {

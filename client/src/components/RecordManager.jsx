@@ -298,7 +298,6 @@ export default function RecordManager({ page, user, onError, onSuccess }) {
   const [classFilter, setClassFilter] = useState('');
   const [subjectFilter, setSubjectFilter] = useState('');
   const [gradeFilter, setGradeFilter] = useState('');
-  const [yearFilter, setYearFilter] = useState('');
   const [teacherFilter, setTeacherFilter] = useState('');
   const [createdFrom, setCreatedFrom] = useState('');
   const [createdTo, setCreatedTo] = useState('');
@@ -321,7 +320,6 @@ export default function RecordManager({ page, user, onError, onSuccess }) {
   if (page === 'Teachers' && classFilter) params.set('class_id', classFilter);
   if (page === 'Teachers' && subjectFilter) params.set('subject_id', subjectFilter);
   if (page === 'Classes' && gradeFilter) params.set('grade', gradeFilter);
-  if (page === 'Classes' && yearFilter) params.set('academic_year_id', yearFilter);
   if (page === 'Classes' && teacherFilter) params.set('teacher_id', teacherFilter);
   if (debouncedQuery) params.set('q', debouncedQuery);
   params.set('sort_order', sortOrder === 'oldest' ? 'oldest' : 'latest');
@@ -350,7 +348,7 @@ export default function RecordManager({ page, user, onError, onSuccess }) {
     return counts;
   }, { female: 0, male: 0, other: 0 }) : null;
   const isFullPageScreen = ['form', 'assignment', 'detail', 'timetable'].includes(screen?.type);
-  useEffect(() => { setCurrentPage(1); }, [debouncedQuery, status, roleFilter, gender, classFilter, subjectFilter, gradeFilter, yearFilter, teacherFilter, createdFrom, createdTo, sortOrder, page]);
+  useEffect(() => { setCurrentPage(1); }, [debouncedQuery, status, roleFilter, gender, classFilter, subjectFilter, gradeFilter, teacherFilter, createdFrom, createdTo, sortOrder, page]);
   useEffect(() => {
     setStatus('');
     setRoleFilter('');
@@ -358,7 +356,6 @@ export default function RecordManager({ page, user, onError, onSuccess }) {
     setClassFilter('');
     setSubjectFilter('');
     setGradeFilter('');
-    setYearFilter('');
     setTeacherFilter('');
   }, [page]);
   useEffect(() => {
@@ -586,9 +583,6 @@ export default function RecordManager({ page, user, onError, onSuccess }) {
               {(filterMeta?.gradeLevels || []).map(grade => <option key={grade.id} value={grade.name}>{grade.name}</option>)}
             </select>
           </label>
-          <SearchableSelect name="class_year_filter" label="Academic year" options={filterMeta?.academicYears || []} value={yearFilter} onChange={setYearFilter}
-            getOptionLabel={row => row.name} getOptionSearchText={row => row.name}
-            placeholder="Search academic years..." emptyValueLabel="All years" noneLabel="All years" />
           <SearchableSelect name="class_teacher_filter" label="Homeroom teacher" options={filterMeta?.teachers || []} value={teacherFilter} onChange={setTeacherFilter}
             getOptionLabel={row => `${row.full_name} · ${row.teacher_code}`} getOptionSearchText={row => `${row.full_name} ${row.teacher_code}`}
             placeholder="Search teachers..." emptyValueLabel="All teachers" noneLabel="All teachers" />
@@ -614,7 +608,7 @@ export default function RecordManager({ page, user, onError, onSuccess }) {
       </div>
       <div className="sims-filter-actions">
         <div className="flex flex-wrap items-center gap-2">
-        <button type="button" onClick={() => { setQuery(''); setStatus(''); setRoleFilter(''); setClassFilter(''); setSubjectFilter(''); setGradeFilter(''); setYearFilter(''); setTeacherFilter(''); setCreatedFrom(''); setCreatedTo(''); setSortOrder('latest'); }} disabled={!query && !status && !roleFilter && !classFilter && !subjectFilter && !gradeFilter && !yearFilter && !teacherFilter && !createdFrom && !createdTo && sortOrder === 'latest'} className="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">Clear filters</button>
+        <button type="button" onClick={() => { setQuery(''); setStatus(''); setRoleFilter(''); setClassFilter(''); setSubjectFilter(''); setGradeFilter(''); setTeacherFilter(''); setCreatedFrom(''); setCreatedTo(''); setSortOrder('latest'); }} disabled={!query && !status && !roleFilter && !classFilter && !subjectFilter && !gradeFilter && !teacherFilter && !createdFrom && !createdTo && sortOrder === 'latest'} className="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">Clear filters</button>
         {page !== 'Users' && <PrintButton label={`Print ${page.toLowerCase()}`} disabled={loading || Boolean(error) || !pageRows.length} />}
         {page === 'Teachers' && canEdit && <button type="button" onClick={() => setScreen({ type: 'assignment' })} className="rounded-lg border border-blue-200 bg-white px-3 py-2.5 text-sm font-semibold text-blue-700">Assign subject &amp; class</button>}
         {canEdit && <button type="button" onClick={() => setScreen({ type: 'form', row: null })} className="primary-action flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold"><Plus size={16} /> Add {recordTypeLabels[page].toLowerCase()}</button>}
@@ -994,7 +988,7 @@ function RecordForm({ page, fields, initial, onCancel, onError, onSave }) {
             class: { options: meta?.classes || [], label: item => `${item.grade_level} · ${item.name}`, placeholder: 'Search class name or grade...' },
             subject: { options: meta?.subjects || [], label: item => `${item.name} · ${item.code}`, placeholder: 'Search subject name or code...' },
             term: { options: meta?.terms || [], label: item => `${item.name} · ${item.academic_year || ''}`, placeholder: 'Search term or academic year...' },
-            'academic-year': { options: meta?.academicYears || [], label: item => item.name, placeholder: 'Search academic year...' },
+            'academic-year': { options: meta?.academicYear ? [meta.academicYear] : [], label: item => item.name, placeholder: 'Search academic year...' },
             'grade-level': {
               options: meta?.gradeLevels || [],
               label: item => item.name,
@@ -1168,7 +1162,7 @@ function TeacherAssignmentForm({ onCancel, onSave }) {
   const selects = [
     ['teacher_id', 'Teacher / staff', meta?.teachers, row => `${row.full_name} · ${row.teacher_code}`, row => `${row.full_name} ${row.teacher_code}`, 'Search full name or staff code...', row => selectDetails('teacher', row)],
     ['class_id', 'Class', meta?.classes, row => `${row.grade_level} · ${row.name}`, row => `${row.grade_level} ${row.name}`, 'Search class...', row => selectDetails('class', row)],
-    ['academic_year_id', 'Academic year', meta?.academicYears, row => row.name, row => row.name, 'Search academic year...', row => selectDetails('academic-year', row)]
+    ['academic_year_id', 'Academic year', meta?.academicYear ? [meta.academicYear] : [], row => row.name, row => row.name, 'Selected academic year', row => selectDetails('academic-year', row)]
   ];
   const filteredSubjects = (meta?.subjects || []).map(row => ({
     row,

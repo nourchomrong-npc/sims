@@ -78,9 +78,13 @@ router.get(apiRoutes.dashboard, expensiveLimiter, academic, async (req, res) => 
   }
 
   const classId = filters.class_id ? await resolvePublicId(pool, 'classes', filters.class_id, 400) : null;
-  const yearId = filters.academic_year_id
+  const requestedYearId = filters.academic_year_id
     ? await resolvePublicId(pool, 'academic_years', filters.academic_year_id, 400)
     : req.academicYearId ?? 0;
+  if (String(requestedYearId) !== String(req.academicYearId ?? 0)) {
+    throw Object.assign(new Error('Dashboard data is limited to the selected academic year'), { status: 400 });
+  }
+  const yearId = req.academicYearId ?? 0;
   const termId = filters.term_id ? await resolvePublicId(pool, 'terms', filters.term_id, 400) : null;
   const subjectId = filters.subject_id ? await resolvePublicId(pool, 'subjects', filters.subject_id, 400) : null;
   const teacherId = await linkedTeacherId(req);
@@ -275,34 +279,37 @@ router.get(apiRoutes.dashboard, expensiveLimiter, academic, async (req, res) => 
 router.get(apiRoutes.meta, academic, async (req, res) => {
   const teacherId = await linkedTeacherId(req);
   const [[currentYearRows], [academicYearRows]] = await Promise.all([
-    pool.execute('SELECT id, name, start_date, end_date, is_current FROM academic_years WHERE is_current = 1 LIMIT 1'),
+    pool.execute('SELECT id, name, start_date, end_date, is_current FROM academic_years WHERE id = ? LIMIT 1', [req.academicYearId || 0]),
     pool.execute('SELECT id, name, start_date, end_date, is_current FROM academic_years ORDER BY start_date DESC')
   ]);
   const year = currentYearRows[0];
   const [termsResult, dashboardTermsResult, classesResult, classSubjectsResult,
     teacherAssignmentsResult, teachersResult, subjectsResult, studentsResult] = await Promise.all([
     pool.execute('SELECT id, name, academic_year_id, start_date, end_date FROM terms WHERE academic_year_id = ? ORDER BY start_date', [year?.id || 0]),
-    pool.execute('SELECT id, name, academic_year_id, start_date, end_date FROM terms ORDER BY start_date DESC'),
+    pool.execute('SELECT id, name, academic_year_id, start_date, end_date FROM terms WHERE academic_year_id = ? ORDER BY start_date DESC',
+      [year?.id || 0]),
     pool.execute(`
     SELECT c.id, c.name, c.grade_level, c.capacity, c.academic_year_id, ay.name AS academic_year,
       c.homeroom_teacher_id, teacher.full_name AS homeroom_teacher,
       (SELECT COUNT(DISTINCT e.student_id) FROM student_enrollments e JOIN students s ON s.id = e.student_id
-       WHERE e.class_id = c.id AND e.current = 1 AND s.status = 'Active' AND s.is_deleted = 0) AS student_count
+       WHERE e.class_id = c.id AND e.current = 1 AND e.academic_year_id = c.academic_year_id
+         AND s.status = 'Active' AND s.is_deleted = 0) AS student_count
     FROM classes c JOIN academic_years ay ON ay.id = c.academic_year_id
     LEFT JOIN teachers teacher ON teacher.id = c.homeroom_teacher_id AND teacher.is_deleted = 0
-    WHERE c.active = 1 AND c.is_deleted = 0
+    WHERE c.active = 1 AND c.is_deleted = 0 AND c.academic_year_id = ?
       AND (? IS NULL OR EXISTS (SELECT 1 FROM teacher_assignments ta
-        WHERE ta.teacher_id = ? AND ta.class_id = c.id AND ta.active = 1))
+        WHERE ta.teacher_id = ? AND ta.class_id = c.id AND ta.active = 1
+          AND ta.academic_year_id = c.academic_year_id))
     ORDER BY c.grade_level, c.name
-  `, [teacherId, teacherId]),
+  `, [year?.id || 0, teacherId, teacherId]),
     pool.execute(`
     SELECT DISTINCT c.public_id AS class_id, s.public_id AS subject_id FROM teacher_assignments ta
     JOIN classes c ON c.id = ta.class_id AND c.active = 1 AND c.is_deleted = 0
     JOIN subjects s ON s.id = ta.subject_id AND s.active = 1 AND s.is_deleted = 0
     JOIN teachers teacher ON teacher.id = ta.teacher_id
       AND teacher.employment_status = 'Active' AND teacher.is_deleted = 0
-    WHERE ta.active = 1 AND (? IS NULL OR ta.teacher_id = ?) ORDER BY class_id, subject_id
-  `, [teacherId, teacherId]),
+    WHERE ta.active = 1 AND ta.academic_year_id = ? AND (? IS NULL OR ta.teacher_id = ?) ORDER BY class_id, subject_id
+  `, [year?.id || 0, teacherId, teacherId]),
     pool.execute(`
     SELECT ta.id, ta.teacher_id, ta.subject_id, ta.class_id, ta.academic_year_id,
       teacher.full_name AS teacher_name, subject.name AS subject_name, schedule_class.name AS class_name
@@ -310,9 +317,9 @@ router.get(apiRoutes.meta, academic, async (req, res) => {
     JOIN teachers teacher ON teacher.id = ta.teacher_id AND teacher.employment_status = 'Active' AND teacher.is_deleted = 0
     JOIN subjects subject ON subject.id = ta.subject_id AND subject.active = 1 AND subject.is_deleted = 0
     JOIN classes schedule_class ON schedule_class.id = ta.class_id AND schedule_class.active = 1 AND schedule_class.is_deleted = 0
-    WHERE ta.active = 1 AND (? IS NULL OR ta.teacher_id = ?)
+    WHERE ta.active = 1 AND ta.academic_year_id = ? AND (? IS NULL OR ta.teacher_id = ?)
     ORDER BY schedule_class.grade_level, schedule_class.name, subject.name, teacher.full_name
-  `, [teacherId, teacherId]),
+  `, [year?.id || 0, teacherId, teacherId]),
     pool.execute(`
     SELECT teacher.id, teacher.teacher_code, teacher.full_name, teacher.email, teacher.phone, teacher.employment_status,
       (SELECT STRING_AGG(DISTINCT CONCAT(c.grade_level, ' ', c.name, ' · ', subject.name), ', '
@@ -320,26 +327,28 @@ router.get(apiRoutes.meta, academic, async (req, res) => {
        FROM teacher_assignments ta
        JOIN classes c ON c.id = ta.class_id AND c.active = 1 AND c.is_deleted = 0
        JOIN subjects subject ON subject.id = ta.subject_id AND subject.active = 1 AND subject.is_deleted = 0
-       WHERE ta.teacher_id = teacher.id AND ta.active = 1) AS assignments
+       WHERE ta.teacher_id = teacher.id AND ta.active = 1 AND ta.academic_year_id = ?) AS assignments
     FROM teachers teacher
     WHERE teacher.employment_status = 'Active' AND teacher.is_deleted = 0
       AND (? IS NULL OR teacher.id = ?) ORDER BY teacher.full_name
-  `, [teacherId, teacherId]),
+  `, [year?.id || 0, teacherId, teacherId]),
     pool.execute(`
     SELECT subject.id, subject.code, subject.name, subject.description, subject.active
     FROM subjects subject WHERE subject.active = 1 AND subject.is_deleted = 0
       AND (? IS NULL OR EXISTS (SELECT 1 FROM teacher_assignments ta
-        WHERE ta.teacher_id = ? AND ta.subject_id = subject.id AND ta.active = 1))
+        WHERE ta.teacher_id = ? AND ta.subject_id = subject.id AND ta.active = 1 AND ta.academic_year_id = ?))
     ORDER BY subject.name
-  `, [teacherId, teacherId]),
+  `, [teacherId, teacherId, year?.id || 0]),
     pool.execute(`
     SELECT s.id, s.student_code, s.english_name, e.class_id FROM students s
     JOIN student_enrollments e ON e.student_id = s.id AND e.current = 1 AND e.enrollment_type = 'Homeroom'
+      AND e.academic_year_id = ?
     WHERE s.status = 'Active' AND s.is_deleted = 0
       AND (? IS NULL OR EXISTS (SELECT 1 FROM teacher_assignments ta
-        WHERE ta.teacher_id = ? AND ta.class_id = e.class_id AND ta.active = 1))
+        WHERE ta.teacher_id = ? AND ta.class_id = e.class_id AND ta.active = 1
+          AND ta.academic_year_id = e.academic_year_id))
     ORDER BY s.english_name
-  `, [teacherId, teacherId])
+  `, [year?.id || 0, teacherId, teacherId])
   ]);
   const terms = termsResult[0];
   const dashboardTerms = dashboardTermsResult[0];

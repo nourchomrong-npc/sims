@@ -2018,8 +2018,6 @@ function SettingsPage({ user, onError, onSuccess, onStartTransition }) {
   const [yearSearch, setYearSearch] = useState('');
   const [termSearch, setTermSearch] = useState('');
   const [scaleSearch, setScaleSearch] = useState('');
-  const [termYearFilter, setTermYearFilter] = useState('');
-  const [scaleYearFilter, setScaleYearFilter] = useState('');
   const [yearPage, setYearPage] = useState(1);
   const [termPage, setTermPage] = useState(1);
   const [scalePage, setScalePage] = useState(1);
@@ -2049,8 +2047,9 @@ function SettingsPage({ user, onError, onSuccess, onStartTransition }) {
     window.print();
   }
   useEffect(() => {
+    if (termFormOpen && !termYearId && meta?.academicYear?.id) setTermYearId(meta.academicYear.id);
     if (scaleFormOpen && !scaleYearId && meta?.academicYear?.id) setScaleYearId(meta.academicYear.id);
-  }, [scaleFormOpen, scaleYearId, meta?.academicYear?.id]);
+  }, [termFormOpen, termYearId, scaleFormOpen, scaleYearId, meta?.academicYear?.id]);
   async function submit(e) {
     e.preventDefault();
     const form = e.currentTarget;
@@ -2128,7 +2127,7 @@ function SettingsPage({ user, onError, onSuccess, onStartTransition }) {
   function openTermForm(row = null) {
     setSelectedTerm(null);
     setTermFormItem(row);
-    setTermYearId(row?.academic_year_id || '');
+    setTermYearId(row?.academic_year_id || meta?.academicYear?.id || '');
     setSettingsFormError('');
     setTermFormOpen(true);
   }
@@ -2181,11 +2180,9 @@ function SettingsPage({ user, onError, onSuccess, onStartTransition }) {
     (!debouncedYearSearch.trim() || fuzzySearchScore(debouncedYearSearch, `${year.name} ${year.start_date} ${year.end_date}`) !== null)
   );
   const visibleTerms = (terms.data || []).filter(term =>
-    (!termYearFilter || String(term.academic_year_id) === String(termYearFilter)) &&
     (!debouncedTermSearch.trim() || fuzzySearchScore(debouncedTermSearch, `${term.name} ${term.academic_year} ${term.start_date} ${term.end_date}`) !== null)
   );
   const visibleScales = (data || []).filter(scale =>
-    (!scaleYearFilter || String(scale.academic_year_id) === String(scaleYearFilter)) &&
     (!debouncedScaleSearch.trim() || fuzzySearchScore(debouncedScaleSearch, `${scale.academic_year} ${scale.label} ${scale.description || ''} ${scale.minimum_percentage} ${scale.maximum_percentage}`) !== null)
   );
   const yearPageCount = Math.max(1, Math.ceil(visibleAcademicYears.length / settingsPageSize));
@@ -2195,8 +2192,8 @@ function SettingsPage({ user, onError, onSuccess, onStartTransition }) {
   const pageTerms = visibleTerms.slice((termPage - 1) * settingsPageSize, termPage * settingsPageSize);
   const pageScales = visibleScales.slice((scalePage - 1) * settingsPageSize, scalePage * settingsPageSize);
   useEffect(() => { setYearPage(1); }, [academicYearStatus, debouncedYearSearch]);
-  useEffect(() => { setTermPage(1); }, [termYearFilter, debouncedTermSearch]);
-  useEffect(() => { setScalePage(1); }, [scaleYearFilter, debouncedScaleSearch]);
+  useEffect(() => { setTermPage(1); }, [meta?.academicYear?.id, debouncedTermSearch]);
+  useEffect(() => { setScalePage(1); }, [meta?.academicYear?.id, debouncedScaleSearch]);
   useEffect(() => {
     if (yearPage > yearPageCount) setYearPage(yearPageCount);
   }, [yearPage, yearPageCount]);
@@ -2262,10 +2259,7 @@ function SettingsPage({ user, onError, onSuccess, onStartTransition }) {
         <SearchSuggestions id="settings-term-search" label="Search terms" value={termSearch}
           onChange={setTermSearch} suggestions={termSuggestions} pending={termSearch.trim() !== debouncedTermSearch.trim()}
           placeholder="Search term or academic year..." inputClassName="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5" />
-        <SearchableSelect name="settings_term_year_filter" label="Academic year" options={meta?.academicYears || []} value={termYearFilter} onChange={setTermYearFilter}
-          getOptionLabel={year => year.name} getOptionSearchText={year => year.name} placeholder="Search years..."
-          emptyValueLabel="All years" noneLabel="All years" />
-        <button type="button" disabled={!termSearch && !termYearFilter} onClick={() => { setTermSearch(''); setTermYearFilter(''); }} className="self-end rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50">Clear filters</button>
+        <button type="button" disabled={!termSearch} onClick={() => setTermSearch('')} className="self-end rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50">Clear search</button>
       </div>
       {terms.error ? <ErrorPanel message={terms.error} /> : terms.loading ? <Loading /> : <div className="sims-table-panel scrollbar mt-4 overflow-x-auto"><table className="sims-table w-full text-left text-sm"><thead className="border-b border-slate-200 text-xs uppercase"><tr>{['Academic year','Term','Start date','End date','Actions'].map(label => <th key={label} className="px-4 py-3">{label}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{pageTerms.map(row => <tr key={row.id} className="hover:bg-slate-50/70"><td className="px-4 py-3">{row.academic_year}</td><td className="px-4 py-3">{row.name}</td><td className="px-4 py-3">{formatDate(row.start_date)}</td><td className="px-4 py-3">{formatDate(row.end_date)}</td><td className="px-4 py-3"><ActionMenu label={`Actions for term ${row.name}`} items={[
         { label: 'View details', onClick: () => setSelectedTerm(row) },
@@ -2282,10 +2276,7 @@ function SettingsPage({ user, onError, onSuccess, onStartTransition }) {
       <SearchSuggestions id="settings-scale-search" label="Search grading scales" value={scaleSearch}
         onChange={setScaleSearch} suggestions={scaleSuggestions} pending={scaleSearch.trim() !== debouncedScaleSearch.trim()}
         placeholder="Search grade, range, or description..." inputClassName="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5" />
-      <SearchableSelect name="settings_scale_year_filter" label="Academic year" options={meta?.academicYears || []} value={scaleYearFilter} onChange={setScaleYearFilter}
-        getOptionLabel={year => year.name} getOptionSearchText={year => year.name} placeholder="Search years..."
-        emptyValueLabel="All years" noneLabel="All years" />
-      <button type="button" disabled={!scaleSearch && !scaleYearFilter} onClick={() => { setScaleSearch(''); setScaleYearFilter(''); }} className="self-end rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50">Clear filters</button>
+      <button type="button" disabled={!scaleSearch} onClick={() => setScaleSearch('')} className="self-end rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50">Clear search</button>
     </div>
     {error ? <ErrorPanel message={error} /> : loading ? <Loading /> : <div className="sims-table-panel overflow-x-auto"><table className="sims-table w-full text-left text-sm"><thead className="border-b border-slate-200 text-xs uppercase"><tr>{['Academic year','Grade','Minimum','Maximum','Description','Actions'].map(label => <th key={label} className="px-4 py-3">{label}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{pageScales.map(row => <tr key={row.id} className="hover:bg-slate-50/70"><td className="px-4 py-3">{row.academic_year}</td><td className="px-4 py-3 font-semibold">{row.label}</td><td className="px-4 py-3">{row.minimum_percentage}%</td><td className="px-4 py-3">{row.maximum_percentage}%</td><td className="px-4 py-3">{row.description || '—'}</td><td className="px-4 py-3"><ActionMenu label={`Actions for grade ${row.label}`} items={[
         { label: 'View details', onClick: () => setSelectedScale(row) },
@@ -2356,7 +2347,7 @@ function SettingsPage({ user, onError, onSuccess, onStartTransition }) {
       <div className="sims-panel">
       <form onSubmit={submitTerm} className="grid gap-3 sm:grid-cols-2">
         {settingsFormError && <p role="alert" className="text-sm font-medium text-red-700 sm:col-span-2">{settingsFormError}</p>}
-        <SearchableSelect name="academic_year_id" label="Academic year" options={meta?.academicYears || []} value={termYearId} onChange={setTermYearId} getOptionLabel={year => year.name} getOptionSearchText={year => year.name} placeholder="Search academic year..." required />
+        <SearchableSelect name="academic_year_id" label="Academic year" options={meta?.academicYear ? [meta.academicYear] : []} value={termYearId} onChange={setTermYearId} getOptionLabel={year => year.name} getOptionSearchText={year => year.name} placeholder="Selected academic year" required />
         <FieldInput name="name" label="Term name" maxLength={80} required defaultValue={termFormItem?.name || ''} />
         <FieldInput name="start_date" label="Start date" type="date" required defaultValue={termFormItem?.start_date || ''} />
         <FieldInput name="end_date" label="End date" type="date" required defaultValue={termFormItem?.end_date || ''} />
@@ -2372,7 +2363,7 @@ function SettingsPage({ user, onError, onSuccess, onStartTransition }) {
       <div className="sims-panel">
       <form onSubmit={submit} className="grid gap-3 sm:grid-cols-2">
         {settingsFormError && <p role="alert" className="text-sm font-medium text-red-700 sm:col-span-2">{settingsFormError}</p>}
-        <SearchableSelect name="academic_year_id" label="Academic year" options={meta?.academicYears || []} value={scaleYearId} onChange={setScaleYearId} getOptionLabel={year => year.name} getOptionSearchText={year => year.name} placeholder="Search academic year..." required />
+        <SearchableSelect name="academic_year_id" label="Academic year" options={meta?.academicYear ? [meta.academicYear] : []} value={scaleYearId} onChange={setScaleYearId} getOptionLabel={year => year.name} getOptionSearchText={year => year.name} placeholder="Selected academic year" required />
         <FieldInput name="label" label="Grade label" required defaultValue={scaleFormItem?.label || ''} />
         <FieldInput name="minimum_percentage" label="Minimum %" type="number" min="0" max="100" step="0.01" required defaultValue={scaleFormItem?.minimum_percentage ?? ''} />
         <FieldInput name="maximum_percentage" label="Maximum %" type="number" min="0" max="100" step="0.01" required defaultValue={scaleFormItem?.maximum_percentage ?? ''} />

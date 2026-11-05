@@ -103,7 +103,10 @@ test('attendance status updates are audited and unchanged statuses do not create
     async rollback() {},
     release() {},
     async execute(sql, params = []) {
-      if (sql.includes('FROM attendance_records WHERE id = ? FOR UPDATE')) return [[{ ...record }], []];
+      if (sql.includes('FROM attendance_records ar JOIN classes c') && sql.includes('FOR UPDATE')) {
+        assert.equal(params[1], 1, 'attendance records are read only for the selected academic year');
+        return [[{ ...record }], []];
+      }
       if (sql.includes('FROM attendance_records ar') && sql.includes('WHERE ar.id = ?')) {
         return [[{
           english_name: 'Student Example', student_code: 'S-12', class_name: 'Grade 8A',
@@ -111,7 +114,8 @@ test('attendance status updates are audited and unchanged statuses do not create
           teacher_code: 'T-6', day_of_week: 4, start_time: '09:00', end_time: '10:00', room: 'Room 2'
         }], []];
       }
-      if (sql.startsWith('UPDATE attendance_records SET status = ?')) {
+      if (sql.includes('UPDATE attendance_records SET status = ?')) {
+        assert.equal(params[3], 1, 'attendance updates are limited to the selected academic year');
         record.status = params[0];
         return [{ affectedRows: 1 }, []];
       }
@@ -253,7 +257,8 @@ test('teachers can submit attendance and update only their assigned class and su
       }
       if (sql.includes('FROM attendance_records WHERE id = ? FOR UPDATE')) return [[{ ...record }], []];
       if (sql.includes('FROM teacher_assignments assignment')) return [assigned ? [{ id: 1 }] : [], []];
-      if (sql.startsWith('UPDATE attendance_records SET status = ?')) {
+      if (sql.includes('UPDATE attendance_records SET status = ?')) {
+        assert.equal(params[3], 1, 'attendance updates are limited to the selected academic year');
         updateCount += 1;
         record.status = params[0];
         return [{ affectedRows: 1 }, []];

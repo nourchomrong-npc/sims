@@ -22,21 +22,22 @@ export function registerTeachersRoutes(router, context) {
       WHERE (? = 1 OR t.is_deleted = 0) AND (? IS NULL OR t.id = ?)
         AND (? IS NULL OR t.employment_status = ?)
         AND (? IS NULL OR EXISTS (SELECT 1 FROM teacher_assignments ta
-          WHERE ta.teacher_id = t.id AND ta.class_id = ? AND ta.active = 1))
+          WHERE ta.teacher_id = t.id AND ta.class_id = ? AND ta.active = 1 AND ta.academic_year_id = ?))
         AND (? IS NULL OR EXISTS (SELECT 1 FROM teacher_assignments ta
-          WHERE ta.teacher_id = t.id AND ta.subject_id = ? AND ta.active = 1))
+          WHERE ta.teacher_id = t.id AND ta.subject_id = ? AND ta.active = 1 AND ta.academic_year_id = ?))
         AND (? IS NULL OR t.teacher_code LIKE ? OR t.full_name LIKE ? OR COALESCE(t.email, '') LIKE ?
           OR COALESCE(t.phone, '') LIKE ?
           OR EXISTS (SELECT 1 FROM users u WHERE u.teacher_id = t.id AND u.username LIKE ?)
           OR EXISTS (SELECT 1 FROM teacher_assignments ta
             JOIN subjects subject ON subject.id = ta.subject_id
             JOIN classes assigned_class ON assigned_class.id = ta.class_id
-            WHERE ta.teacher_id = t.id AND CONCAT(subject.name, ' / ', assigned_class.name) LIKE ?))
+            WHERE ta.teacher_id = t.id AND ta.academic_year_id = ?
+              AND CONCAT(subject.name, ' / ', assigned_class.name) LIKE ?))
         ${createdRange.sql}
     `;
     const params = [includeDeleted, teacherId, teacherId, filters.status || null, filters.status || null,
-      classId, classId, subjectId, subjectId,
-      search, search, search, search, search, search, search, ...createdRange.params];
+      classId, classId, req.academicYearId || 0, subjectId, subjectId, req.academicYearId || 0,
+      search, search, search, search, search, search, req.academicYearId || 0, search, ...createdRange.params];
     const [countResult, rowsResult] = page
       ? await Promise.all([
         pool.execute(`SELECT COUNT(*) AS total FROM teachers t ${whereSql}`, params),
@@ -44,21 +45,23 @@ export function registerTeachersRoutes(router, context) {
       SELECT t.*, STRING_AGG(DISTINCT CONCAT(s.name, ' / ', c.name), ', ' ORDER BY CONCAT(s.name, ' / ', c.name)) assignments,
         (SELECT u.username FROM users u WHERE u.teacher_id = t.id LIMIT 1) AS account_username
       FROM teachers t LEFT JOIN teacher_assignments ta ON ta.teacher_id = t.id AND ta.active = 1
+        AND ta.academic_year_id = ?
       LEFT JOIN subjects s ON s.id = ta.subject_id AND s.is_deleted = 0
       LEFT JOIN classes c ON c.id = ta.class_id AND c.is_deleted = 0
       ${whereSql}
       GROUP BY t.id ${createdAtOrder(createdFilters, 't.created_at', 't.id')} LIMIT ? OFFSET ?
-    `, [...params, page.pageSize, page.offset])
+    `, [req.academicYearId || 0, ...params, page.pageSize, page.offset])
       ])
       : [null, await pool.execute(`
         SELECT t.*, STRING_AGG(DISTINCT CONCAT(s.name, ' / ', c.name), ', ' ORDER BY CONCAT(s.name, ' / ', c.name)) assignments,
           (SELECT u.username FROM users u WHERE u.teacher_id = t.id LIMIT 1) AS account_username
         FROM teachers t LEFT JOIN teacher_assignments ta ON ta.teacher_id = t.id AND ta.active = 1
+          AND ta.academic_year_id = ?
         LEFT JOIN subjects s ON s.id = ta.subject_id AND s.is_deleted = 0
         LEFT JOIN classes c ON c.id = ta.class_id AND c.is_deleted = 0
         ${whereSql}
         GROUP BY t.id ${createdAtOrder(createdFilters, 't.created_at', 't.id')}
-      `, params)];
+      `, [req.academicYearId || 0, ...params])];
     const rows = await publicizeRows(pool, 'teachers', rowsResult[0]);
     if (page) return res.json({ rows, total: Number(countResult[0][0].total), page: page.page, page_size: page.pageSize });
     res.json(rows);
@@ -239,6 +242,9 @@ export function registerTeachersRoutes(router, context) {
     data.subject_ids = await resolvePublicIds(pool, 'subjects', data.subject_ids, 400);
     data.class_id = await resolvePublicId(pool, 'classes', data.class_id, 400);
     data.academic_year_id = await resolvePublicId(pool, 'academic_years', data.academic_year_id, 400);
+    if (String(data.academic_year_id) !== String(req.academicYearId || 0)) {
+      return res.status(400).json({ error: 'Select the academic year shown in the header' });
+    }
     const connection = await pool.getConnection();
     let transactionStarted = false;
     try {

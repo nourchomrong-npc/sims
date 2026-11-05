@@ -217,6 +217,18 @@ function registerVisibilityRoutes(endpoint, table, entity, middleware) {
         await connection.rollback();
         return res.status(404).json({ error: 'Record is already in Trash or does not exist' });
       }
+      if (['classes', 'assessments', 'class_schedules'].includes(table)) {
+        const yearSql = table === 'classes'
+          ? 'SELECT academic_year_id FROM classes WHERE id = ?'
+          : table === 'assessments'
+            ? 'SELECT c.academic_year_id FROM assessments item JOIN classes c ON c.id = item.class_id WHERE item.id = ?'
+            : 'SELECT c.academic_year_id FROM class_schedules item JOIN classes c ON c.id = item.class_id WHERE item.id = ?';
+        const [[yearRecord]] = await connection.execute(yearSql, [id]);
+        if (!yearRecord || String(yearRecord.academic_year_id) !== String(req.academicYearId || 0)) {
+          await connection.rollback();
+          return res.status(404).json({ error: 'Record not found in the selected academic year' });
+        }
+      }
       const recordBefore = await activityRecordSnapshot(connection, entity, id);
       if (table === 'users' && id === req.session.user.internalId) {
         await connection.rollback();
@@ -288,6 +300,18 @@ function registerVisibilityRoutes(endpoint, table, entity, middleware) {
       if (!record?.is_deleted || !trashRecord) {
         await connection.rollback();
         return res.status(404).json({ error: 'Record is already visible or does not exist' });
+      }
+      if (['classes', 'assessments', 'class_schedules'].includes(table)) {
+        const yearSql = table === 'classes'
+          ? 'SELECT academic_year_id FROM classes WHERE id = ?'
+          : table === 'assessments'
+            ? 'SELECT c.academic_year_id FROM assessments item JOIN classes c ON c.id = item.class_id WHERE item.id = ?'
+            : 'SELECT c.academic_year_id FROM class_schedules item JOIN classes c ON c.id = item.class_id WHERE item.id = ?';
+        const [[yearRecord]] = await connection.execute(yearSql, [id]);
+        if (!yearRecord || String(yearRecord.academic_year_id) !== String(req.academicYearId || 0)) {
+          await connection.rollback();
+          return res.status(404).json({ error: 'Record not found in the selected academic year' });
+        }
       }
       const recordBefore = await activityRecordSnapshot(connection, entity, id);
       let previousAccountStatus;

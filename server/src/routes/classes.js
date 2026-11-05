@@ -11,26 +11,23 @@ export function registerClassesRoutes(router, context) {
       q: z.string().max(100).optional(),
       status: z.enum(['Active', 'Inactive']).optional(),
       grade: z.string().max(50).optional(),
-      academic_year_id: publicId.optional(),
       teacher_id: publicId.optional()
     }), req.query);
     const createdFilters = parse(createdAtQuery, req.query);
     const createdRange = createdAtFilter(createdFilters, 'c.created_at');
     const page = requestedPage(req);
     const search = filters.q ? `%${filters.q}%` : null;
-    const academicYearId = filters.academic_year_id
-      ? await resolvePublicId(pool, 'academic_years', filters.academic_year_id, 400)
-      : req.academicYearId ?? 0;
+    const academicYearId = req.academicYearId ?? 0;
     const homeroomTeacherId = filters.teacher_id ? await resolvePublicId(pool, 'teachers', filters.teacher_id, 400) : null;
     const fromWhere = `
       FROM classes c JOIN academic_years ay ON ay.id = c.academic_year_id
       LEFT JOIN teachers t ON t.id = c.homeroom_teacher_id AND t.is_deleted = 0
-      LEFT JOIN student_enrollments e ON e.class_id = c.id
+      LEFT JOIN student_enrollments e ON e.class_id = c.id AND e.academic_year_id = c.academic_year_id
       LEFT JOIN students s ON s.id = e.student_id AND s.is_deleted = 0
       WHERE (? = 1 OR c.is_deleted = 0)
         AND (? IS NULL OR c.active = ?)
         AND (? IS NULL OR c.grade_level = ?)
-        AND (? IS NULL OR c.academic_year_id = ?)
+        AND c.academic_year_id = ?
         AND (? IS NULL OR c.homeroom_teacher_id = ?)
         AND (? IS NULL OR c.name LIKE ? OR c.grade_level LIKE ? OR ay.name LIKE ? OR COALESCE(t.full_name, '') LIKE ?)
         ${teacherFilter.sql}
@@ -38,7 +35,7 @@ export function registerClassesRoutes(router, context) {
     `;
     const active = filters.status === undefined ? null : filters.status === 'Active';
     const params = [includeDeleted, active, active, filters.grade || null, filters.grade || null,
-      academicYearId, academicYearId, homeroomTeacherId, homeroomTeacherId,
+      academicYearId, homeroomTeacherId, homeroomTeacherId,
       search, search, search, search, search, ...teacherFilter.params, ...createdRange.params];
     const [countResult, rowsResult] = page
       ? await Promise.all([
@@ -76,6 +73,9 @@ export function registerClassesRoutes(router, context) {
     );
     if (!grade) return res.status(400).json({ error: 'Select a grade level configured for this school' });
     data.academic_year_id = await resolvePublicId(pool, 'academic_years', data.academic_year_id, 400);
+    if (String(data.academic_year_id) !== String(req.academicYearId ?? 0)) {
+      return res.status(400).json({ error: 'Select the current academic year shown in the header' });
+    }
     if (data.homeroom_teacher_id) data.homeroom_teacher_id = await resolvePublicId(pool, 'teachers', data.homeroom_teacher_id, 400);
     const [[year]] = await pool.execute('SELECT id FROM academic_years WHERE id = ?', [data.academic_year_id]);
     if (!year) return res.status(400).json({ error: 'Academic year not found' });
@@ -91,6 +91,11 @@ export function registerClassesRoutes(router, context) {
   router.patch(apiRoutes.classes.item, schoolManager, transactionalMutation(pool, async (req, res) => {
     const { id: publicClassId } = parse(idParam, req.params);
     const id = await resolvePublicId(pool, 'classes', publicClassId);
+    const [[classRecord]] = await pool.execute(
+      'SELECT id FROM classes WHERE id = ? AND academic_year_id = ?',
+      [id, req.academicYearId ?? 0]
+    );
+    if (!classRecord) return res.status(404).json({ error: 'Class not found in the selected academic year' });
     const data = parse(z.object({
       name: displayNameSchema(80).optional(),
       grade_level: displayNameSchema(50).optional(),
@@ -113,14 +118,17 @@ export function registerClassesRoutes(router, context) {
       if (!teacher) return res.status(400).json({ error: 'Select an active homeroom teacher' });
     }
     if (data.capacity !== undefined) {
-      const [[count]] = await pool.execute('SELECT COUNT(DISTINCT student_id) AS total FROM student_enrollments WHERE class_id = ? AND current = 1', [id]);
+      const [[count]] = await pool.execute(
+        'SELECT COUNT(DISTINCT student_id) AS total FROM student_enrollments WHERE class_id = ? AND academic_year_id = ? AND current = 1',
+        [id, req.academicYearId ?? 0]
+      );
       if (data.capacity < count.total) return res.status(400).json({ error: `Capacity cannot be below current enrollment (${count.total})` });
     }
     try {
       const recordBefore = await activityRecordSnapshot(pool, 'class', id);
       const [result] = await pool.execute(
-        `UPDATE classes SET ${fields.map(key => `${key} = ?`).join(', ')} WHERE id = ?`,
-        [...fields.map(key => data[key] ?? null), id]
+        `UPDATE classes SET ${fields.map(key => `${key} = ?`).join(', ')} WHERE id = ? AND academic_year_id = ?`,
+        [...fields.map(key => data[key] ?? null), id, req.academicYearId ?? 0]
       );
       if (!result.affectedRows) return res.status(404).json({ error: 'Class not found' });
       await logActivity(pool, req.session.user.internalId, 'updated', 'class', id, { fields, record_before: recordBefore });
@@ -133,6 +141,11 @@ export function registerClassesRoutes(router, context) {
   router.get(apiRoutes.classSchedules.timeSlots, academic, async (req, res) => {
     const filters = parse(z.object({ class_id: publicId }), req.query);
     const classId = await resolvePublicId(pool, 'classes', filters.class_id, 400);
+    const [[classRecord]] = await pool.execute(
+      'SELECT id FROM classes WHERE id = ? AND academic_year_id = ? AND is_deleted = 0',
+      [classId, req.academicYearId ?? 0]
+    );
+    if (!classRecord) return res.status(404).json({ error: 'Class not found in the selected academic year' });
     const teacherId = await linkedTeacherId(req);
     if (teacherId) {
       const [[assignment]] = await pool.execute(
@@ -154,7 +167,10 @@ export function registerClassesRoutes(router, context) {
   router.post(apiRoutes.classSchedules.timeSlots, schoolManager, transactionalMutation(pool, async (req, res) => {
     const data = parse(classScheduleTimeSlotInput, req.body);
     const classId = await resolvePublicId(pool, 'classes', data.class_id, 400);
-    const [[classRecord]] = await pool.execute('SELECT id FROM classes WHERE id = ? AND active = 1 AND is_deleted = 0', [classId]);
+    const [[classRecord]] = await pool.execute(
+      'SELECT id FROM classes WHERE id = ? AND academic_year_id = ? AND active = 1 AND is_deleted = 0',
+      [classId, req.academicYearId ?? 0]
+    );
     if (!classRecord) return res.status(404).json({ error: 'Class not found or inactive' });
     try {
       await pool.execute(`
@@ -171,6 +187,11 @@ export function registerClassesRoutes(router, context) {
   router.delete(apiRoutes.classSchedules.timeSlots, schoolManager, async (req, res) => {
     const data = parse(classScheduleTimeSlotInput, req.body);
     const classId = await resolvePublicId(pool, 'classes', data.class_id, 400);
+    const [[classRecord]] = await pool.execute(
+      'SELECT id FROM classes WHERE id = ? AND academic_year_id = ? AND is_deleted = 0',
+      [classId, req.academicYearId ?? 0]
+    );
+    if (!classRecord) return res.status(404).json({ error: 'Class not found in the selected academic year' });
     const connection = await pool.getConnection();
     try {
       await connection.beginTransaction();
@@ -255,11 +276,13 @@ export function registerClassesRoutes(router, context) {
       AND (? IS NULL OR schedule_row.day_of_week = ?)
       AND (? IS NULL OR schedule_row.end_time > ?)
       AND (? IS NULL OR schedule_row.start_time < ?)
+      AND c.academic_year_id = ?
       ${createdRange.sql}
     `;
     const active = filters.status === undefined ? null : filters.status === 'Active';
     const params = [includeInactive, includeInactive, includeInactive, includeInactive, includeInactive,
-      includeDeleted, active, active, classId, classId, teacherId, teacherId, ...scheduleFilterParams, ...createdRange.params];
+      includeDeleted, active, active, classId, classId, teacherId, teacherId, ...scheduleFilterParams,
+      req.academicYearId ?? 0, ...createdRange.params];
     const scheduleOrder = filters.sort_order
       ? createdAtOrder(filters, 'schedule_row.created_at', 'schedule_row.id')
       : 'ORDER BY schedule_row.day_of_week, schedule_row.start_time, c.grade_level, c.name, schedule_row.id';
@@ -294,12 +317,22 @@ export function registerClassesRoutes(router, context) {
     }), req.body);
     const { ignored_schedule_ids: ignoredPublicIds = [], ...scheduleInput } = parsed;
     const data = await resolveClassScheduleIds(scheduleInput);
+    const [[classRecord]] = await pool.execute(
+      'SELECT id FROM classes WHERE id = ? AND academic_year_id = ? AND is_deleted = 0',
+      [data.class_id, req.academicYearId ?? 0]
+    );
+    if (!classRecord) return res.status(400).json({ error: 'Select a class in the selected academic year' });
     const ignoredIds = await resolvePublicIds(pool, 'class_schedules', ignoredPublicIds, 400);
     await validateClassSchedule(data, null, pool, ignoredIds);
     res.json({ valid: true });
   });
   router.post(apiRoutes.classSchedules.collection, schoolManager, transactionalMutation(pool, async (req, res) => {
     const data = await resolveClassScheduleIds(parse(classScheduleInput, req.body));
+    const [[classRecord]] = await pool.execute(
+      'SELECT id FROM classes WHERE id = ? AND academic_year_id = ? AND is_deleted = 0',
+      [data.class_id, req.academicYearId ?? 0]
+    );
+    if (!classRecord) return res.status(400).json({ error: 'Select a class in the selected academic year' });
     await validateClassSchedule(data);
     const [result] = await pool.execute(`
       INSERT INTO class_schedules (class_id, subject_id, teacher_id, day_of_week, start_time, end_time, room)
@@ -313,6 +346,12 @@ export function registerClassesRoutes(router, context) {
   router.patch(apiRoutes.classSchedules.item, schoolManager, transactionalMutation(pool, async (req, res) => {
     const { id: publicScheduleId } = parse(idParam, req.params);
     const id = await resolvePublicId(pool, 'class_schedules', publicScheduleId);
+    const [[existingSchedule]] = await pool.execute(`
+      SELECT schedule_row.id FROM class_schedules schedule_row
+      JOIN classes c ON c.id = schedule_row.class_id
+      WHERE schedule_row.id = ? AND c.academic_year_id = ?
+    `, [id, req.academicYearId ?? 0]);
+    if (!existingSchedule) return res.status(404).json({ error: 'Schedule not found in the selected academic year' });
     if (Object.keys(req.body).length === 1 && Object.hasOwn(req.body, 'active')) {
       const { active } = parse(z.object({ active: z.boolean() }), req.body);
       const recordBefore = await activityRecordSnapshot(pool, 'class_schedule', id);
@@ -354,6 +393,9 @@ export function registerClassesRoutes(router, context) {
         [classId]
       );
       if (!classRecord) throw Object.assign(new Error('Class not found or inactive'), { status: 404 });
+      if (String(classRecord.academic_year_id) !== String(req.academicYearId ?? 0)) {
+        throw Object.assign(new Error('Select a class in the selected academic year'), { status: 400 });
+      }
   
       await connection.execute('LOCK TABLE class_schedules IN SHARE ROW EXCLUSIVE MODE');
       const [existingRows] = await connection.execute(`
@@ -504,9 +546,11 @@ export function registerClassesRoutes(router, context) {
     const { id: publicScheduleId } = parse(idParam, req.params);
     const id = await resolvePublicId(pool, 'class_schedules', publicScheduleId, 404, true);
     const [[schedule]] = await pool.execute(`
-      SELECT class_id, subject_id, teacher_id, day_of_week, start_time, end_time, room, is_deleted
-      FROM class_schedules WHERE id = ?
-    `, [id]);
+      SELECT schedule_row.class_id, schedule_row.subject_id, schedule_row.teacher_id, schedule_row.day_of_week,
+        schedule_row.start_time, schedule_row.end_time, schedule_row.room, schedule_row.is_deleted
+      FROM class_schedules schedule_row JOIN classes c ON c.id = schedule_row.class_id
+      WHERE schedule_row.id = ? AND c.academic_year_id = ?
+    `, [id, req.academicYearId ?? 0]);
     if (!schedule || !schedule.is_deleted) {
       return res.status(404).json({ error: 'Schedule is already visible or does not exist' });
     }
