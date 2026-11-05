@@ -27,6 +27,10 @@ Never commit `.env` or expose database, session, or Supabase secret values to th
 
 Apply `database/schema.postgres.sql` to the intended empty PostgreSQL database using the provider's SQL editor. Optionally apply `database/seed.sql` for fictional development data. For an existing PostgreSQL database, back it up and apply `database/migrate_record_timestamps.postgres.sql` using the provider's SQL editor to ensure all tables have timestamp defaults and update triggers. Existing rows without recorded timestamps remain blank. Apply `database/migrate_trash.postgres.sql` before deploying the Trash feature; it creates the separate `trash_records` table, adds deletion timestamps, and backfills existing hidden rows. Review and back up existing databases before applying any other migration.
 
+Apply `database/migrate_academic_year_transition.postgres.sql` to existing PostgreSQL databases before deploying the academic-year transition feature. It adds year status, subject-specific enrollment, transition/outcome records, and enrollment links for attendance and scores. The migration does not copy historical assessments, attendance, scores, or results.
+
+Apply `database/migrate_grades_table.postgres.sql` to existing PostgreSQL databases before deploying grade-catalogue-backed class forms or academic-year transitions. It creates the `grades` catalogue, seeds Grade K–12, preserves existing class grade labels, and links `classes.grade_level` to the catalogue. For fresh databases, `schema.postgres.sql` already includes the catalogue.
+
 Files named `schema.sql` and `migrate_*.sql` without the `.postgres` suffix are retained for legacy MySQL installations; do not run them against PostgreSQL.
 
 ## Install, test, and run

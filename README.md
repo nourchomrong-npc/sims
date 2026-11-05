@@ -70,6 +70,8 @@ For a new database, run [`database/schema.postgres.sql`](./database/schema.postg
 
 The database scripts without a `.postgres` suffix are legacy MySQL files. Do not run them against PostgreSQL. Schema upgrades are explicit operator actions; back up and review the target database before applying migrations.
 
+For an existing PostgreSQL database, apply [`server/database/migrate_academic_year_transition.postgres.sql`](./server/database/migrate_academic_year_transition.postgres.sql) from the provider's SQL editor before deploying the academic-year transition feature. It adds academic-year statuses, subject-class enrollments, transition/outcome records, and enrollment references for attendance and scores without copying historical records.
+
 ### 2. Configure the backend
 
 From the repository root, create the local environment files:

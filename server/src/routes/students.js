@@ -10,8 +10,10 @@ export function registerStudentsRoutes(router, context) {
         const [[visiblePhoto]] = await pool.execute(`
           SELECT 1 FROM students s
           JOIN student_enrollments enrollment ON enrollment.student_id = s.id AND enrollment.current = 1
+            AND enrollment.academic_year_id = (SELECT id FROM academic_years WHERE is_current = 1 LIMIT 1)
           JOIN teacher_assignments assignment ON assignment.class_id = enrollment.class_id
             AND assignment.teacher_id = ? AND assignment.active = 1
+            AND (enrollment.enrollment_type = 'Homeroom' OR assignment.subject_id = enrollment.subject_id)
           WHERE s.photo_url = ? AND s.status = 'Active' AND s.is_deleted = 0
         `, [teacherId, `/student-photos/${req.params.filename}`]);
         if (!visiblePhoto) return res.status(404).json({ error: 'Student photo not found' });
@@ -22,6 +24,66 @@ export function registerStudentsRoutes(router, context) {
       if (error.code === 'ENOENT') return res.status(404).json({ error: 'Student photo not found' });
       throw error;
     }
+  });
+  router.get(apiRoutes.students.timetable, academic, async (req, res) => {
+    const { id: studentPublicId } = parse(idParam, req.params);
+    const studentId = await resolvePublicId(pool, 'students', studentPublicId, 404);
+    const filters = parse(z.object({ academic_year_id: publicId.optional() }), req.query);
+    let yearId;
+    if (filters.academic_year_id) {
+      yearId = await resolvePublicId(pool, 'academic_years', filters.academic_year_id, 400);
+    } else {
+      const [[currentYear]] = await pool.execute('SELECT id FROM academic_years WHERE is_current = 1 LIMIT 1');
+      yearId = currentYear?.id;
+    }
+    if (!yearId) return res.json({ student_id: studentPublicId, main_grade: null, enrollments: [] });
+    const [[student]] = await pool.execute(`
+      SELECT s.id, s.public_id, s.student_code, s.english_name, c.grade_level AS main_grade,
+        c.name AS homeroom_class
+      FROM students s
+      LEFT JOIN student_enrollments home ON home.student_id = s.id
+        AND home.academic_year_id = ? AND home.current = 1 AND home.enrollment_type = 'Homeroom'
+      LEFT JOIN classes c ON c.id = home.class_id
+      WHERE s.id = ? AND s.is_deleted = 0
+    `, [yearId, studentId]);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+    const teacherId = await linkedTeacherId(req);
+    const [rows] = await pool.execute(`
+      SELECT enrollment.id, enrollment.public_id, enrollment.class_id, enrollment.subject_id,
+        enrollment.academic_year_id, enrollment.enrollment_type, class_record.name AS class_name,
+        class_record.grade_level, subject.name AS subject_name, schedule.id AS schedule_id,
+        schedule.day_of_week, schedule.start_time, schedule.end_time, schedule.room,
+        COALESCE(schedule_teacher.full_name, homeroom_teacher.full_name) AS teacher_name
+      FROM student_enrollments enrollment
+      JOIN classes class_record ON class_record.id = enrollment.class_id AND class_record.is_deleted = 0
+      LEFT JOIN class_schedules schedule ON schedule.class_id = enrollment.class_id
+        AND schedule.active = 1 AND schedule.is_deleted = 0
+        AND (enrollment.enrollment_type = 'Homeroom' OR schedule.subject_id = enrollment.subject_id)
+      LEFT JOIN subjects subject ON subject.id = COALESCE(enrollment.subject_id, schedule.subject_id)
+      LEFT JOIN teachers schedule_teacher ON schedule_teacher.id = schedule.teacher_id
+      LEFT JOIN teachers homeroom_teacher ON homeroom_teacher.id = class_record.homeroom_teacher_id
+      WHERE enrollment.student_id = ? AND enrollment.academic_year_id = ? AND enrollment.current = 1
+        AND (? IS NULL OR EXISTS (
+          SELECT 1 FROM teacher_assignments assignment
+          WHERE assignment.teacher_id = ? AND assignment.class_id = enrollment.class_id
+            AND assignment.active = 1
+            AND (enrollment.enrollment_type = 'Homeroom' OR assignment.subject_id = enrollment.subject_id)
+        ))
+      ORDER BY schedule.day_of_week NULLS LAST, schedule.start_time NULLS LAST,
+        class_record.grade_level, subject.name
+    `, [studentId, yearId, teacherId, teacherId]);
+    const enrollments = await publicizeRows(pool, 'student_enrollments', rows, {
+      class_id: 'classes', subject_id: 'subjects', schedule_id: 'class_schedules',
+      academic_year_id: 'academic_years'
+    });
+    res.json({
+      student_id: student.public_id,
+      student_code: student.student_code,
+      student_name: student.english_name,
+      main_grade: student.main_grade,
+      homeroom_class: student.homeroom_class,
+      enrollments
+    });
   });
   router.get(apiRoutes.students.collection, academic, async (req, res) => {
     const includeDeleted = includeDeletedRecords(req);
@@ -39,21 +101,38 @@ export function registerStudentsRoutes(router, context) {
     const status = filters.status || null;
     const gender = filters.gender || null;
     const classId = filters.class_id ? await resolvePublicId(pool, 'classes', filters.class_id, 400) : null;
-    const teacherFilter = teacherAssignmentFilter(teacherId, 'e.class_id');
+    const teacherFilter = teacherId ? `
+      AND EXISTS (
+        SELECT 1 FROM student_enrollments visible_enrollment
+        JOIN teacher_assignments visible_assignment
+          ON visible_assignment.class_id = visible_enrollment.class_id
+          AND visible_assignment.teacher_id = ? AND visible_assignment.active = 1
+          AND (visible_enrollment.enrollment_type = 'Homeroom'
+            OR visible_assignment.subject_id = visible_enrollment.subject_id)
+        WHERE visible_enrollment.student_id = s.id AND visible_enrollment.current = 1
+          AND visible_enrollment.academic_year_id = (SELECT id FROM academic_years WHERE is_current = 1 LIMIT 1)
+      )
+    ` : '';
     const fromWhere = `
       FROM students s
       LEFT JOIN student_enrollments e ON e.student_id = s.id AND e.current = 1
+        AND e.enrollment_type = 'Homeroom'
+        AND e.academic_year_id = (SELECT id FROM academic_years WHERE is_current = 1 LIMIT 1)
       LEFT JOIN classes c ON c.id = e.class_id AND c.is_deleted = 0
       LEFT JOIN student_photos photo ON photo.url = s.photo_url
       WHERE (s.student_code LIKE ? OR s.english_name LIKE ? OR COALESCE(s.khmer_name,'') LIKE ?)
         AND (? IS NULL OR s.status = ?)
         AND (? IS NULL OR s.gender = ?)
-        AND (? IS NULL OR e.class_id = ?)
+        AND (? IS NULL OR EXISTS (
+          SELECT 1 FROM student_enrollments class_filter
+          WHERE class_filter.student_id = s.id AND class_filter.current = 1 AND class_filter.class_id = ?
+            AND class_filter.academic_year_id = (SELECT id FROM academic_years WHERE is_current = 1 LIMIT 1)
+        ))
         AND (? = 1 OR s.is_deleted = 0)
-        ${teacherFilter.sql}
+        ${teacherFilter}
         ${createdRange.sql}
     `;
-    const params = [search, search, search, status, status, gender, gender, classId, classId, includeDeleted, ...teacherFilter.params, ...createdRange.params];
+    const params = [search, search, search, status, status, gender, gender, classId, classId, includeDeleted, ...(teacherId ? [teacherId] : []), ...createdRange.params];
     const [countResult, rowsResult] = page
       ? await Promise.all([
         pool.execute(`SELECT COUNT(DISTINCT s.id) AS total ${fromWhere}`, params),
@@ -120,7 +199,7 @@ export function registerStudentsRoutes(router, context) {
         if (data.status !== 'Active') throw Object.assign(new Error('Only active students can be enrolled in a class'), { status: 400 });
         const [[classInfo]] = await connection.execute(`
           SELECT c.capacity, c.academic_year_id,
-            (SELECT COUNT(*) FROM student_enrollments e WHERE e.class_id = c.id AND e.current = 1) AS enrollment_count
+            (SELECT COUNT(DISTINCT e.student_id) FROM student_enrollments e WHERE e.class_id = c.id AND e.current = 1) AS enrollment_count
           FROM classes c WHERE c.id = ? AND c.active = 1 FOR UPDATE
         `, [data.class_id]);
         if (!classInfo || classInfo.academic_year_id !== year[0].id) {
@@ -222,11 +301,11 @@ export function registerStudentsRoutes(router, context) {
       }
       if (Object.hasOwn(data, 'class_id')) {
         const [current] = await connection.execute(
-          'SELECT id, class_id FROM student_enrollments WHERE student_id = ? AND current = 1 FOR UPDATE', [id]
+          "SELECT id, class_id FROM student_enrollments WHERE student_id = ? AND current = 1 AND enrollment_type = 'Homeroom' FOR UPDATE", [id]
         );
         if (data.class_id === null) {
           if (current.length) {
-            await connection.execute('UPDATE student_enrollments SET current = 0, exit_date = ? WHERE student_id = ? AND current = 1',
+            await connection.execute("UPDATE student_enrollments SET current = 0, exit_date = ? WHERE student_id = ? AND current = 1 AND enrollment_type = 'Homeroom'",
               [data.enrollment_date || new Date().toISOString().slice(0, 10), id]);
           }
         } else if (!current[0] || current[0].class_id !== data.class_id) {
@@ -237,7 +316,7 @@ export function registerStudentsRoutes(router, context) {
           }
           const [[classInfo]] = await connection.execute(`
             SELECT c.capacity, c.academic_year_id,
-              (SELECT COUNT(*) FROM student_enrollments e WHERE e.class_id = c.id AND e.current = 1 AND e.student_id <> ?) AS enrollment_count
+              (SELECT COUNT(DISTINCT e.student_id) FROM student_enrollments e WHERE e.class_id = c.id AND e.current = 1 AND e.student_id <> ?) AS enrollment_count
             FROM classes c WHERE c.id = ? AND c.active = 1 FOR UPDATE
           `, [id, data.class_id]);
           if (!classInfo || classInfo.academic_year_id !== year[0].id) {
@@ -251,9 +330,9 @@ export function registerStudentsRoutes(router, context) {
               [data.enrollment_date || new Date().toISOString().slice(0, 10), current[0].id]);
           }
           await connection.execute(`
-            INSERT INTO student_enrollments (student_id, class_id, academic_year_id, enrollment_date, current)
-            VALUES (?, ?, ?, ?, 1)
-            ON CONFLICT (student_id, class_id, academic_year_id)
+            INSERT INTO student_enrollments (student_id, class_id, academic_year_id, enrollment_date, current, enrollment_type)
+            VALUES (?, ?, ?, ?, 1, 'Homeroom')
+            ON CONFLICT
             DO UPDATE SET enrollment_date = EXCLUDED.enrollment_date, exit_date = NULL, current = 1
           `, [id, data.class_id, year[0].id, data.enrollment_date || new Date().toISOString().slice(0, 10)]);
         }

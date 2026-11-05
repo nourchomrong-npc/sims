@@ -1,9 +1,10 @@
 const tables = new Set([
-  'users', 'academic_years', 'teachers', 'classes', 'students', 'terms',
+  'users', 'academic_years', 'teachers', 'grades', 'classes', 'students', 'terms',
   'student_enrollments', 'subjects', 'teacher_assignments', 'attendance_records',
-  'class_schedules', 'assessments', 'student_scores', 'grading_scales', 'activity_logs'
+  'class_schedules', 'assessments', 'student_scores', 'grading_scales', 'activity_logs',
+  'academic_year_transitions', 'academic_year_transition_students', 'student_subject_outcomes'
 ]);
-const softDeleteTables = new Set(['users', 'teachers', 'classes', 'students', 'subjects', 'class_schedules', 'assessments']);
+const softDeleteTables = new Set(['users', 'teachers', 'grades', 'classes', 'students', 'subjects', 'class_schedules', 'assessments']);
 
 function tableName(table) {
   if (!tables.has(table)) throw new Error(`Unsupported public ID table: ${table}`);
@@ -84,6 +85,7 @@ export async function publicizeEntityIds(executor, rows) {
   const entityTables = {
     user: 'users',
     academic_year: 'academic_years',
+    academic_year_transition: 'academic_year_transitions',
     student: 'students',
     teacher: 'teachers',
     class: 'classes',
@@ -116,7 +118,13 @@ export async function publicizeEntityIds(executor, rows) {
     attendance_record_id: 'attendance_records',
     assessment_id: 'assessments',
     student_score_id: 'student_scores',
-    grading_scale_id: 'grading_scales'
+    grading_scale_id: 'grading_scales',
+    transition_id: 'academic_year_transitions',
+    source_year_id: 'academic_years',
+    target_year_id: 'academic_years',
+    source_enrollment_id: 'student_enrollments',
+    new_enrollment_id: 'student_enrollments',
+    student_enrollment_id: 'student_enrollments'
   };
   const result = await publicizeRows(executor, 'activity_logs', rows, { user_id: 'users' });
   const byTable = new Map();

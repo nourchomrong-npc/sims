@@ -1,4 +1,5 @@
 import { apiRoutes } from './apiRoutes.js';
+import { transactionalMutation } from '../utils/transactions.js';
 
 export function registerSubjectsRoutes(router, context) {
   const { randomUUID, z, pool, activityRecordSnapshot, logActivity, publicIdFor, publicizeRows, resolvePublicId, generateRecordCode, displayNameSchema, idParam, parse, schoolManager, academic, includeDeletedRecords, linkedTeacherId, createdAtQuery, createdAtFilter, createdAtOrder, requestedPage } = context;
@@ -68,7 +69,7 @@ export function registerSubjectsRoutes(router, context) {
       connection.release();
     }
   });
-  router.patch(apiRoutes.subjects.item, schoolManager, async (req, res) => {
+  router.patch(apiRoutes.subjects.item, schoolManager, transactionalMutation(pool, async (req, res) => {
     const { id: publicSubjectId } = parse(idParam, req.params);
     const id = await resolvePublicId(pool, 'subjects', publicSubjectId);
     const data = parse(z.object({
@@ -92,5 +93,5 @@ export function registerSubjectsRoutes(router, context) {
       if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Subject code already exists' });
       throw error;
     }
-  });
+  }));
 }

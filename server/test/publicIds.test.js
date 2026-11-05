@@ -5,6 +5,7 @@ import { publicizeEntityIds, publicizeRows, resolvePublicId, resolvePublicIds } 
 const studentId = '5f1d4f19-78b1-4d9c-9e4c-f1127bd19c01';
 const classId = '9cf13f34-56ba-43e3-81cf-92171e256a21';
 const scheduleId = 'b8a1b37a-d7e4-4db4-b5d3-cf5f479a8292';
+const gradeId = 'aa0e184c-769b-45d0-81d1-ae8a475e1de9';
 
 function createExecutor(records) {
   return {
@@ -29,6 +30,7 @@ function createExecutor(records) {
 
 const executor = createExecutor({
   students: [{ id: 14, public_id: studentId, class_id: 3 }],
+  grades: [{ id: 25, public_id: gradeId }],
   classes: [{ id: 3, public_id: classId }],
   teachers: [{ id: 44, public_id: '1ea30575-cc4a-4efc-8e43-ffbe6aa56a57' }],
   teacher_assignments: [{ id: 22, public_id: 'aa63d176-334f-40f4-ad34-b2cd288dd357' }],
@@ -57,6 +59,20 @@ test('serializes primary and foreign keys as public UUIDs', async () => {
     { student_code: 'S-14', class_id: classId, id: studentId },
     { student_code: 'S-15', class_id: null, id: studentId }
   ]);
+});
+
+test('serializes grade catalogue records with public UUIDs', async () => {
+  const [grade] = await publicizeRows(executor, 'grades', [{
+    id: 25,
+    name: 'Grade 8',
+    sort_order: 8
+  }]);
+
+  assert.deepEqual(grade, {
+    name: 'Grade 8',
+    sort_order: 8,
+    id: gradeId
+  });
 });
 
 test('skips the primary ID lookup when rows already include public UUIDs', async () => {

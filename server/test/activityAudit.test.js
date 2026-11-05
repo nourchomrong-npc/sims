@@ -28,6 +28,9 @@ test('user updates audit historical identities and only actual changes in one tr
   const originalGetConnection = pool.getConnection;
 
   pool.execute = async (sql, params = []) => {
+    if (sql.includes('SELECT id, public_id FROM academic_years WHERE is_current = 1 LIMIT 1')) {
+      return [[{ id: 1, public_id: 'cf4dfdf6-bae4-45de-9a5d-c2a89a80e234' }], []];
+    }
     if (sql.includes('SELECT id FROM users WHERE public_id = ?')) return [[{ id: 22 }], []];
     if (sql.includes('SELECT id FROM teachers WHERE public_id = ?')) return [[{ id: 12 }], []];
     if (sql.includes('SELECT active, is_deleted FROM users WHERE id = ?')) return [[{ active: true, is_deleted: false }], []];
@@ -51,6 +54,12 @@ test('user updates audit historical identities and only actual changes in one tr
       }
       if (sql.includes('SELECT * FROM teachers WHERE id = ?')) {
         return [[{ id: 12, public_id: teacherPublicId, full_name: 'Teacher Name Updated', teacher_code: 'T-12' }], []];
+      }
+      if (sql.includes('SELECT created_at, updated_at FROM users WHERE id = ?')) {
+        return [[{ created_at: null, updated_at: null }], []];
+      }
+      if (sql.includes('SELECT created_at, updated_at FROM teachers WHERE id = ?')) {
+        return [[{ created_at: null, updated_at: null }], []];
       }
       if (sql.includes('SELECT id, public_id, username, full_name, role FROM users WHERE id = ?')) {
         const identity = Number(params[0]) === 9

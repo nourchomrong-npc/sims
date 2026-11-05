@@ -1,4 +1,5 @@
 import { apiRoutes } from './apiRoutes.js';
+import { transactionalMutation } from '../utils/transactions.js';
 
 export function registerSchoolSetupRoutes(router, context) {
   const { z, pool, activityRecordSnapshot, logActivity, publicIdFor, publicizeRows, resolvePublicId, academicYearInput, displayNameSchema, idParam, parse, publicId, admin, manager, academic, linkedTeacherId } = context;
@@ -6,34 +7,42 @@ export function registerSchoolSetupRoutes(router, context) {
   router.get(apiRoutes.meta, academic, async (req, res) => {
     const teacherId = await linkedTeacherId(req);
     const [[currentYearRows], [academicYearRows]] = await Promise.all([
-      pool.execute('SELECT id, name, start_date, end_date, is_current FROM academic_years WHERE is_current = 1 LIMIT 1'),
-      pool.execute('SELECT id, name, start_date, end_date, is_current FROM academic_years ORDER BY start_date DESC')
+      pool.execute('SELECT id, name, start_date, end_date, is_current, status FROM academic_years WHERE id = ? LIMIT 1', [req.academicYearId || 0]),
+      pool.execute('SELECT id, name, start_date, end_date, is_current, status FROM academic_years ORDER BY start_date DESC')
     ]);
     const year = currentYearRows[0];
-    const [termsResult, dashboardTermsResult, classesResult, classSubjectsResult,
+    const canSwitchAcademicYear = ['Admin', 'SuperAdmin'].includes(req.session.user.role);
+    const [termsResult, dashboardTermsResult, classesResult, gradeLevelsResult, classSubjectsResult,
       teacherAssignmentsResult, teachersResult, subjectsResult, studentsResult] = await Promise.all([
       pool.execute('SELECT id, name, academic_year_id, start_date, end_date FROM terms WHERE academic_year_id = ? ORDER BY start_date', [year?.id || 0]),
       pool.execute('SELECT id, name, academic_year_id, start_date, end_date FROM terms ORDER BY start_date DESC'),
       pool.execute(`
       SELECT c.id, c.name, c.grade_level, c.capacity, c.academic_year_id, ay.name AS academic_year,
         c.homeroom_teacher_id, teacher.full_name AS homeroom_teacher,
-        (SELECT COUNT(*) FROM student_enrollments e JOIN students s ON s.id = e.student_id
+        (SELECT COUNT(DISTINCT e.student_id) FROM student_enrollments e JOIN students s ON s.id = e.student_id
          WHERE e.class_id = c.id AND e.current = 1 AND s.status = 'Active' AND s.is_deleted = 0) AS student_count
       FROM classes c JOIN academic_years ay ON ay.id = c.academic_year_id
       LEFT JOIN teachers teacher ON teacher.id = c.homeroom_teacher_id AND teacher.is_deleted = 0
-      WHERE c.active = 1 AND c.is_deleted = 0
+      WHERE c.active = 1 AND c.is_deleted = 0 AND c.academic_year_id = ?
         AND (? IS NULL OR EXISTS (SELECT 1 FROM teacher_assignments ta
           WHERE ta.teacher_id = ? AND ta.class_id = c.id AND ta.active = 1))
       ORDER BY c.grade_level, c.name
-    `, [teacherId, teacherId]),
+    `, [year?.id || 0, teacherId, teacherId]),
       pool.execute(`
+    SELECT id, public_id, name, sort_order
+    FROM grades
+    WHERE active = 1 AND is_deleted = 0
+    ORDER BY sort_order, name
+    `),
+    pool.execute(`
       SELECT DISTINCT c.public_id AS class_id, s.public_id AS subject_id FROM teacher_assignments ta
       JOIN classes c ON c.id = ta.class_id AND c.active = 1 AND c.is_deleted = 0
       JOIN subjects s ON s.id = ta.subject_id AND s.active = 1 AND s.is_deleted = 0
       JOIN teachers teacher ON teacher.id = ta.teacher_id
         AND teacher.employment_status = 'Active' AND teacher.is_deleted = 0
-      WHERE ta.active = 1 AND (? IS NULL OR ta.teacher_id = ?) ORDER BY class_id, subject_id
-    `, [teacherId, teacherId]),
+      WHERE ta.active = 1 AND ta.academic_year_id = ? AND (? IS NULL OR ta.teacher_id = ?)
+      ORDER BY class_id, subject_id
+    `, [year?.id || 0, teacherId, teacherId]),
       pool.execute(`
       SELECT ta.id, ta.teacher_id, ta.subject_id, ta.class_id, ta.academic_year_id,
         teacher.full_name AS teacher_name, subject.name AS subject_name, schedule_class.name AS class_name
@@ -41,9 +50,9 @@ export function registerSchoolSetupRoutes(router, context) {
       JOIN teachers teacher ON teacher.id = ta.teacher_id AND teacher.employment_status = 'Active' AND teacher.is_deleted = 0
       JOIN subjects subject ON subject.id = ta.subject_id AND subject.active = 1 AND subject.is_deleted = 0
       JOIN classes schedule_class ON schedule_class.id = ta.class_id AND schedule_class.active = 1 AND schedule_class.is_deleted = 0
-      WHERE ta.active = 1 AND (? IS NULL OR ta.teacher_id = ?)
+      WHERE ta.active = 1 AND ta.academic_year_id = ? AND (? IS NULL OR ta.teacher_id = ?)
       ORDER BY schedule_class.grade_level, schedule_class.name, subject.name, teacher.full_name
-    `, [teacherId, teacherId]),
+    `, [year?.id || 0, teacherId, teacherId]),
       pool.execute(`
       SELECT teacher.id, teacher.teacher_code, teacher.full_name, teacher.email, teacher.phone, teacher.employment_status,
         (SELECT STRING_AGG(DISTINCT CONCAT(c.grade_level, ' ', c.name, ' · ', subject.name), ', '
@@ -51,11 +60,11 @@ export function registerSchoolSetupRoutes(router, context) {
          FROM teacher_assignments ta
          JOIN classes c ON c.id = ta.class_id AND c.active = 1 AND c.is_deleted = 0
          JOIN subjects subject ON subject.id = ta.subject_id AND subject.active = 1 AND subject.is_deleted = 0
-         WHERE ta.teacher_id = teacher.id AND ta.active = 1) AS assignments
+         WHERE ta.teacher_id = teacher.id AND ta.active = 1 AND ta.academic_year_id = ?) AS assignments
       FROM teachers teacher
       WHERE teacher.employment_status = 'Active' AND teacher.is_deleted = 0
         AND (? IS NULL OR teacher.id = ?) ORDER BY teacher.full_name
-    `, [teacherId, teacherId]),
+    `, [year?.id || 0, teacherId, teacherId]),
       pool.execute(`
       SELECT subject.id, subject.code, subject.name, subject.description, subject.active
       FROM subjects subject WHERE subject.active = 1 AND subject.is_deleted = 0
@@ -65,15 +74,18 @@ export function registerSchoolSetupRoutes(router, context) {
     `, [teacherId, teacherId]),
       pool.execute(`
       SELECT s.id, s.student_code, s.english_name, e.class_id FROM students s
-      JOIN student_enrollments e ON e.student_id = s.id AND e.current = 1 WHERE s.status = 'Active' AND s.is_deleted = 0
+      JOIN student_enrollments e ON e.student_id = s.id AND e.current = 1
+        AND e.academic_year_id = ? AND e.enrollment_type = 'Homeroom'
+      WHERE s.status = 'Active' AND s.is_deleted = 0
         AND (? IS NULL OR EXISTS (SELECT 1 FROM teacher_assignments ta
           WHERE ta.teacher_id = ? AND ta.class_id = e.class_id AND ta.active = 1))
       ORDER BY s.english_name
-    `, [teacherId, teacherId])
+    `, [year?.id || 0, teacherId, teacherId])
     ]);
     const terms = termsResult[0];
     const dashboardTerms = dashboardTermsResult[0];
     const classes = classesResult[0];
+    const gradeLevels = gradeLevelsResult[0];
     const classSubjects = classSubjectsResult[0];
     const teacherAssignments = teacherAssignmentsResult[0];
     const teachers = teachersResult[0];
@@ -81,7 +93,7 @@ export function registerSchoolSetupRoutes(router, context) {
     const students = studentsResult[0];
     const [
       [publicYear], publicAcademicYears, publicTerms, publicDashboardTerms,
-      publicClasses, publicTeacherAssignments, publicTeachers, publicSubjects, publicStudents
+      publicClasses, publicGradeLevels, publicTeacherAssignments, publicTeachers, publicSubjects, publicStudents
     ] = await Promise.all([
       publicizeRows(pool, 'academic_years', year ? [year] : []),
       publicizeRows(pool, 'academic_years', academicYearRows),
@@ -91,6 +103,7 @@ export function registerSchoolSetupRoutes(router, context) {
         academic_year_id: 'academic_years',
         homeroom_teacher_id: 'teachers'
       }),
+      publicizeRows(pool, 'grades', gradeLevels),
       publicizeRows(pool, 'teacher_assignments', teacherAssignments, {
         teacher_id: 'teachers',
         class_id: 'classes',
@@ -103,10 +116,11 @@ export function registerSchoolSetupRoutes(router, context) {
     ]);
     res.json({
       academicYear: publicYear || null,
-      academicYears: publicAcademicYears,
+      academicYears: canSwitchAcademicYear ? publicAcademicYears : (publicYear ? [publicYear] : []),
       terms: publicTerms,
       dashboardTerms: publicDashboardTerms,
       classes: publicClasses,
+      gradeLevels: publicGradeLevels,
       classSubjects,
       teacherAssignments: publicTeacherAssignments,
       teachers: publicTeachers,
@@ -127,10 +141,11 @@ export function registerSchoolSetupRoutes(router, context) {
     const connection = await pool.getConnection();
     try {
       await connection.beginTransaction();
-      if (data.is_current) await connection.execute('UPDATE academic_years SET is_current = 0 WHERE is_current = 1');
+      if (data.is_current) await connection.execute("UPDATE academic_years SET is_current = 0, status = 'Closed' WHERE is_current = 1");
       const [result] = await connection.execute(
-        'INSERT INTO academic_years (name, start_date, end_date, is_current) VALUES (?, ?, ?, ?)',
-        [data.name, data.start_date, data.end_date, data.is_current]
+        'INSERT INTO academic_years (name, start_date, end_date, is_current, status) VALUES (?, ?, ?, ?, ?)',
+        [data.name, data.start_date, data.end_date, data.is_current,
+          data.is_current ? 'Current' : data.status || (data.end_date < new Date().toISOString().slice(0, 10) ? 'Closed' : 'Upcoming')]
       );
       await logActivity(connection, req.session.user.internalId, 'created', 'academic_year', result.insertId, {
         name: data.name, start_date: data.start_date, end_date: data.end_date, is_current: data.is_current
@@ -169,10 +184,11 @@ export function registerSchoolSetupRoutes(router, context) {
           return res.status(409).json({ error: 'Set another academic year as current before unsetting this one.' });
         }
       }
-      if (data.is_current) await connection.execute('UPDATE academic_years SET is_current = 0 WHERE is_current = 1 AND id <> ?', [id]);
+      if (data.is_current) await connection.execute("UPDATE academic_years SET is_current = 0, status = 'Closed' WHERE is_current = 1 AND id <> ?", [id]);
       await connection.execute(
-        'UPDATE academic_years SET name = ?, start_date = ?, end_date = ?, is_current = ? WHERE id = ?',
-        [data.name, data.start_date, data.end_date, data.is_current, id]
+        'UPDATE academic_years SET name = ?, start_date = ?, end_date = ?, is_current = ?, status = ? WHERE id = ?',
+        [data.name, data.start_date, data.end_date, data.is_current,
+          data.is_current ? 'Current' : data.status || (data.end_date < new Date().toISOString().slice(0, 10) ? 'Closed' : 'Upcoming'), id]
       );
       await logActivity(connection, req.session.user.internalId, 'updated', 'academic_year', id, {
         name: data.name, start_date: data.start_date, end_date: data.end_date, is_current: data.is_current,
@@ -218,7 +234,7 @@ export function registerSchoolSetupRoutes(router, context) {
       connection.release();
     }
   });
-  router.post(apiRoutes.terms.collection, manager, async (req, res) => {
+  router.post(apiRoutes.terms.collection, manager, transactionalMutation(pool, async (req, res) => {
     const termInput = z.object({
       academic_year_id: publicId,
       name: displayNameSchema(80),
@@ -244,7 +260,7 @@ export function registerSchoolSetupRoutes(router, context) {
       if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Term name already exists for this academic year' });
       throw error;
     }
-  });
+  }));
   router.patch(apiRoutes.terms.item, manager, async (req, res) => {
     const { id: publicTermId } = parse(idParam, req.params);
     const id = await resolvePublicId(pool, 'terms', publicTermId, 404);
@@ -284,7 +300,7 @@ export function registerSchoolSetupRoutes(router, context) {
       connection.release();
     }
   });
-  router.delete(apiRoutes.terms.item, manager, async (req, res) => {
+  router.delete(apiRoutes.terms.item, manager, transactionalMutation(pool, async (req, res) => {
     const { id: publicTermId } = parse(idParam, req.params);
     const id = await resolvePublicId(pool, 'terms', publicTermId, 404);
     const [[term]] = await pool.execute('SELECT name FROM terms WHERE id = ?', [id]);
@@ -300,7 +316,7 @@ export function registerSchoolSetupRoutes(router, context) {
       }
       throw error;
     }
-  });
+  }));
   router.get(apiRoutes.gradingScales.collection, academic, async (req, res) => {
     const [rows] = await pool.execute(`
       SELECT gs.*, ay.name AS academic_year FROM grading_scales gs
@@ -341,8 +357,9 @@ export function registerSchoolSetupRoutes(router, context) {
         academic_year_id: publicAcademicYearId, label: data.label, minimum_percentage: data.minimum_percentage,
         maximum_percentage: data.maximum_percentage, description: data.description
       });
+      const id = await publicIdFor(connection, 'grading_scales', result.insertId);
       await connection.commit();
-      res.status(201).json({ id: await publicIdFor(pool, 'grading_scales', result.insertId) });
+      res.status(201).json({ id });
     } catch (error) {
       await connection.rollback();
       if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'That grading label already exists for this academic year' });
@@ -400,7 +417,7 @@ export function registerSchoolSetupRoutes(router, context) {
       connection.release();
     }
   });
-  router.delete(apiRoutes.gradingScales.item, manager, async (req, res) => {
+  router.delete(apiRoutes.gradingScales.item, manager, transactionalMutation(pool, async (req, res) => {
     const { id: publicScaleId } = parse(idParam, req.params);
     const id = await resolvePublicId(pool, 'grading_scales', publicScaleId, 404);
     const [[scale]] = await pool.execute('SELECT label FROM grading_scales WHERE id = ?', [id]);
@@ -409,5 +426,5 @@ export function registerSchoolSetupRoutes(router, context) {
     await pool.execute('DELETE FROM grading_scales WHERE id = ?', [id]);
     await logActivity(pool, req.session.user.internalId, 'deleted', 'grading_scale', id, { label: scale.label, record_before: recordBefore });
     res.json({ success: true });
-  });
+  }));
 }

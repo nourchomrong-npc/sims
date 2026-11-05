@@ -22,6 +22,7 @@ export const apiRoutes = Object.freeze({
   students: Object.freeze({
     collection: '/students',
     item: '/students/:id',
+    timetable: '/students/:id/timetable',
     archive: '/students/:id/archive',
     photo: '/student-photos/:filename'
   }),
@@ -72,7 +73,9 @@ export const apiRoutes = Object.freeze({
   }),
   academicYears: Object.freeze({
     collection: '/academic-years',
-    item: '/academic-years/:id'
+    item: '/academic-years/:id',
+    transitionOptions: '/academic-years/transition/options',
+    transition: '/academic-years/transition'
   }),
   gradingScales: Object.freeze({
     collection: '/grading-scales',

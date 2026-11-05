@@ -1,4 +1,5 @@
 import { apiRoutes } from './apiRoutes.js';
+import { transactionalMutation } from '../utils/transactions.js';
 
 export function registerAcademicsRoutes(router, context) {
   const { z, pool, logActivity, publicIdFor, publicizeRows, resolvePublicId, resolvePublicIds, displayNameSchema, idParam, parse, publicId, admin, schoolManager, academic, includeDeletedRecords, linkedTeacherId, teacherAssignmentFilter, createdAtQuery, createdAtFilter, createdAtOrder, requestedPage } = context;
@@ -30,7 +31,10 @@ export function registerAcademicsRoutes(router, context) {
       : null;
     const subjectId = filters.subject_id ? await resolvePublicId(pool, 'subjects', filters.subject_id, 400) : null;
     const scheduleId = filters.schedule_id ? await resolvePublicId(pool, 'class_schedules', filters.schedule_id, 400) : null;
-    const search = filters.q ? `%${filters.q}%` : null;
+    const searchTerms = filters.q?.split(/\s+/).filter(Boolean) || [];
+    const searchSql = searchTerms.length
+      ? `AND (${searchTerms.map(() => '(s.english_name ILIKE ? OR s.student_code ILIKE ?)').join(' AND ')})`
+      : '';
     const isPaginated = filters.page !== undefined || filters.page_size !== undefined;
     const page = filters.page || 1;
     const pageSize = filters.page_size || 25;
@@ -43,13 +47,15 @@ export function registerAcademicsRoutes(router, context) {
         AND (? IS NULL OR ar.subject_id = ?)
         AND (? IS NULL OR ar.schedule_id = ?)
         AND (? IS NULL OR ar.status = ?)
-        AND (? IS NULL OR s.english_name LIKE ? OR s.student_code LIKE ?)
+        ${searchSql}
         ${teacherFilter.sql}
         ${createdRange.sql}
+        AND c.academic_year_id = ?
     `;
     const whereParams = [filters.date || null, filters.date || null, classId, classId, ...(classIds || []), subjectId, subjectId,
-      scheduleId, scheduleId, filters.status || null, filters.status || null, search, search, search,
-      ...teacherFilter.params, ...createdRange.params];
+      scheduleId, scheduleId, filters.status || null, filters.status || null,
+      ...searchTerms.flatMap(term => [`%${term}%`, `%${term}%`]),
+      ...teacherFilter.params, ...createdRange.params, req.academicYearId || 0];
     if (isPaginated) {
       const [[count]] = await pool.execute(`
         SELECT COUNT(*) AS total
@@ -84,7 +90,7 @@ export function registerAcademicsRoutes(router, context) {
       });
       return res.json({ rows: publicRows, total: Number(count.total), page, page_size: pageSize });
     }
-    const resultLimit = search ? '' : 'LIMIT 1000';
+    const resultLimit = searchTerms.length ? '' : 'LIMIT 1000';
     const [rows] = await pool.execute(`
       SELECT ar.id, ar.public_id, ar.student_id, ar.class_id, ar.subject_id, ar.schedule_id, ar.attendance_date,
       ar.status, ar.note, ar.recorded_by, ar.created_at, ar.updated_at,
@@ -221,11 +227,14 @@ export function registerAcademicsRoutes(router, context) {
         throw Object.assign(new Error('Choose a class schedule for the selected date and subject'), { status: 400 });
       }
       const [members] = await connection.execute(`
-        SELECT e.student_id, s.english_name, s.student_code
+        SELECT DISTINCT ON (e.student_id) e.student_id, e.id AS enrollment_id, s.english_name, s.student_code
         FROM student_enrollments e JOIN students s ON s.id = e.student_id
-        WHERE e.class_id = ? AND e.current = 1 AND s.status = 'Active' AND s.is_deleted = 0
+        WHERE e.class_id = ? AND e.current = 1
+          AND (e.enrollment_type = 'Homeroom' OR (e.enrollment_type = 'Subject' AND e.subject_id = ?))
+          AND s.status = 'Active' AND s.is_deleted = 0
           AND e.student_id IN (${data.records.map(() => '?').join(', ')})
-      `, [data.class_id, ...data.records.map(row => row.student_id)]);
+        ORDER BY e.student_id, CASE WHEN e.enrollment_type = 'Subject' THEN 0 ELSE 1 END
+      `, [data.class_id, data.subject_id, ...data.records.map(row => row.student_id)]);
       if (members.length !== data.records.length) throw Object.assign(new Error('Every student must be actively enrolled in the selected class'), { status: 400 });
       const membersByStudent = new Map(members.map(member => [String(member.student_id), member]));
       const [existingRecords] = await connection.execute(`
@@ -263,11 +272,14 @@ export function registerAcademicsRoutes(router, context) {
           continue;
         }
         await connection.execute(`
-          INSERT INTO attendance_records (student_id, class_id, subject_id, schedule_id, attendance_date, status, note, recorded_by)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO attendance_records
+            (student_id, class_id, subject_id, schedule_id, attendance_date, status, note, recorded_by, student_enrollment_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT (student_id, class_id, attendance_schedule_scope, attendance_date)
-          DO UPDATE SET status = EXCLUDED.status, note = EXCLUDED.note, recorded_by = EXCLUDED.recorded_by
-        `, [record.student_id, data.class_id, data.subject_id, data.schedule_id, data.attendance_date, record.status, record.note || null, req.session.user.internalId]);
+          DO UPDATE SET status = EXCLUDED.status, note = EXCLUDED.note, recorded_by = EXCLUDED.recorded_by,
+            student_enrollment_id = EXCLUDED.student_enrollment_id
+        `, [record.student_id, data.class_id, data.subject_id, data.schedule_id, data.attendance_date,
+          record.status, record.note || null, req.session.user.internalId, member?.enrollment_id || null]);
       }
       const savedCount = data.records.filter(record => record.status !== null).length;
       const unmarkedCount = data.records.length - savedCount;
@@ -424,7 +436,7 @@ export function registerAcademicsRoutes(router, context) {
     `, [classId, subjectId, subjectId, termId, termId, ...teacherFilter.params]);
     res.json(results);
   });
-  router.post(apiRoutes.assessments.collection, admin, async (req, res) => {
+  router.post(apiRoutes.assessments.collection, admin, transactionalMutation(pool, async (req, res) => {
     const data = parse(z.object({
       title: displayNameSchema(150), subject_id: publicId,
       class_id: publicId, term_id: publicId,
@@ -454,7 +466,7 @@ export function registerAcademicsRoutes(router, context) {
       VALUES (?, ?, ?, ?, ?, ?, ?)`, [data.title, data.subject_id, data.class_id, data.term_id, data.assessment_date, data.maximum_score, req.session.user.internalId]);
     await logActivity(pool, req.session.user.internalId, 'created', 'assessment', result.insertId);
     res.status(201).json({ id: await publicIdFor(pool, 'assessments', result.insertId) });
-  });
+  }));
   router.post(apiRoutes.scores, admin, async (req, res) => {
     const data = parse(z.object({
       assessment_id: publicId,
@@ -481,14 +493,21 @@ export function registerAcademicsRoutes(router, context) {
       }
       if (data.scores.some(row => row.score > assessment.maximum_score)) throw Object.assign(new Error('Score cannot exceed the assessment maximum'), { status: 400 });
       for (const row of data.scores) {
-        const [enrolled] = await connection.execute('SELECT 1 FROM student_enrollments WHERE student_id = ? AND class_id = ? AND current = 1',
-          [row.student_id, assessment.class_id]);
-        if (!enrolled.length) throw Object.assign(new Error('A student is not currently enrolled in the assessment class'), { status: 400 });
+        const [[enrollment]] = await connection.execute(`
+          SELECT id FROM student_enrollments
+          WHERE student_id = ? AND class_id = ? AND current = 1
+            AND (enrollment_type = 'Homeroom' OR (enrollment_type = 'Subject' AND subject_id = ?))
+          ORDER BY CASE WHEN enrollment_type = 'Subject' THEN 0 ELSE 1 END
+          LIMIT 1
+        `, [row.student_id, assessment.class_id, assessment.subject_id]);
+        if (!enrollment) throw Object.assign(new Error('A student is not currently enrolled in the assessment class and subject'), { status: 400 });
         await connection.execute(`
-          INSERT INTO student_scores (assessment_id, student_id, score, comment, entered_by) VALUES (?, ?, ?, ?, ?)
+          INSERT INTO student_scores (assessment_id, student_id, score, comment, entered_by, student_enrollment_id)
+          VALUES (?, ?, ?, ?, ?, ?)
           ON CONFLICT (assessment_id, student_id)
-          DO UPDATE SET score = EXCLUDED.score, comment = EXCLUDED.comment, entered_by = EXCLUDED.entered_by
-        `, [data.assessment_id, row.student_id, row.score, row.comment || null, req.session.user.internalId]);
+          DO UPDATE SET score = EXCLUDED.score, comment = EXCLUDED.comment, entered_by = EXCLUDED.entered_by,
+            student_enrollment_id = EXCLUDED.student_enrollment_id
+        `, [data.assessment_id, row.student_id, row.score, row.comment || null, req.session.user.internalId, enrollment.id]);
       }
       await logActivity(connection, req.session.user.internalId, 'entered_scores', 'assessment', data.assessment_id, {
         assessment: assessment.title, maximum_score: assessment.maximum_score, count: data.scores.length

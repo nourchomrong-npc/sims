@@ -9,7 +9,7 @@ import {
   Tooltip, XAxis, YAxis, BarChart, Bar
 } from 'recharts';
 import { createPortal } from 'react-dom';
-import { api, useMutationMessage } from './services/api.js';
+import { api, setAcademicYearContext, useMutationMessage } from './services/api.js';
 import { apiRoute, apiRoutes } from './services/apiRoutes.js';
 import { consumeLoginQrHash } from './components/loginQr.js';
 import GlobalSearch from './components/GlobalSearch.jsx';
@@ -22,9 +22,10 @@ import TeachersPage from './pages/TeachersPage.jsx';
 import UsersPage from './pages/UsersPage.jsx';
 import TrashPage from './pages/TrashPage.jsx';
 import SyncManagementPanel from './components/SyncManagementPanel.jsx';
+import AcademicYearTransitionWizard from './components/AcademicYearTransitionWizard.jsx';
 import Metric from './components/dashboard/Metric.jsx';
 import InsightList from './components/dashboard/InsightList.jsx';
-import { ActionMenu, dateInputValue, DetailsPage, Empty, ErrorPanel, FieldInput, formatDate, formatDateTime, formatDisplayValue, formatTime, inputMaxLengths, Loading, Modal, Notice, Pagination, PrintButton, SearchableSelect, SearchSuggestions, StatusBadge, StatusSelect, useDebouncedValue, useLoad } from './components/ui.jsx';
+import { ActionMenu, dateInputValue, DetailsPage, Empty, ErrorPanel, FieldInput, formatDate, formatDateTime, formatDisplayValue, formatTime, fuzzySearchScore, inputMaxLengths, Loading, Modal, Notice, Pagination, PrintButton, SearchableSelect, SearchSuggestions, StatusBadge, StatusSelect, useDebouncedValue, useLoad } from './components/ui.jsx';
 
 const links = [
   ['Dashboard', LayoutDashboard, ['Admin', 'SuperAdmin', 'Teacher', 'School Manager']],
@@ -118,9 +119,41 @@ function AppContent() {
   const [authMessage, setAuthMessage] = useState('');
   const [globalSearchResult, setGlobalSearchResult] = useState(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [headerAcademicYearId, setHeaderAcademicYearId] = useState('');
+  const { data: headerMeta } = useLoad(user && !passwordRequired ? apiRoutes.meta : null);
   const setError = message => setNotice(message ? { message, type: 'error' } : null);
   const setSuccess = message => setNotice(message ? { message, type: 'success' } : null);
+  const canSwitchAcademicYear = ['Admin', 'SuperAdmin'].includes(user?.role);
+  const selectedHeaderAcademicYear = headerMeta?.academicYears?.find(year => year.id === headerAcademicYearId) ||
+    headerMeta?.academicYear;
+  const academicYearStatus = selectedHeaderAcademicYear?.status || 'Current';
+  const academicYearStatusStyle = academicYearStatus === 'Current'
+    ? 'border-green-200 bg-green-50 text-green-700'
+    : academicYearStatus === 'Upcoming'
+      ? 'border-blue-200 bg-blue-50 text-blue-700'
+      : 'border-slate-200 bg-slate-100 text-slate-600';
+  useEffect(() => {
+    setHeaderAcademicYearId('');
+    setAcademicYearContext('');
+  }, [user?.id]);
+  useEffect(() => {
+    if (!headerMeta?.academicYear?.id) return;
+    const availableYears = headerMeta.academicYears || [];
+    if (!headerAcademicYearId || !availableYears.some(year => year.id === headerAcademicYearId)) {
+      setHeaderAcademicYearId(headerMeta.academicYear.id);
+    }
+  }, [headerMeta, headerAcademicYearId]);
+  useEffect(() => {
+    setAcademicYearContext(headerAcademicYearId);
+  }, [headerAcademicYearId]);
+  function confirmLeaveCurrentPage() {
+    if (page === 'Academic Year Transition') {
+      return window.confirm('Leave the transition wizard? Your setup progress will be lost.');
+    }
+    return true;
+  }
   function navigateTo(label) {
+    if (label !== page && !confirmLeaveCurrentPage()) return;
     if (hasUnsavedChanges && !window.confirm('Discard unsaved timetable changes?')) return;
     setHasUnsavedChanges(false);
     setPage(label);
@@ -128,6 +161,12 @@ function AppContent() {
     setMobileOpen(false);
     setError('');
     setSuccess('');
+  }
+  function changeAcademicYear(academicYearId) {
+    if (academicYearId === headerAcademicYearId) return;
+    if (hasUnsavedChanges && !window.confirm('Discard unsaved timetable changes before switching academic years?')) return;
+    if (hasUnsavedChanges) setHasUnsavedChanges(false);
+    setHeaderAcademicYearId(academicYearId);
   }
 
   useEffect(() => {
@@ -159,6 +198,11 @@ function AppContent() {
       window.removeEventListener('sims:account-disabled', handleAccountDisabled);
       window.removeEventListener('sims:session-expired', handleSessionExpired);
     };
+  }, []);
+  useEffect(() => {
+    const handleMutationNotice = event => setNotice(event.detail);
+    window.addEventListener('sims:mutation-notice', handleMutationNotice);
+    return () => window.removeEventListener('sims:mutation-notice', handleMutationNotice);
   }, []);
   useEffect(() => {
     if (!user) return undefined;
@@ -193,6 +237,7 @@ function AppContent() {
     setError('');
   }
   async function logout() {
+    if (!confirmLeaveCurrentPage()) return;
     if (hasUnsavedChanges && !window.confirm('Discard unsaved timetable changes?')) return;
     setHasUnsavedChanges(false);
     await api(apiRoutes.auth.logout, { method: 'POST' });
@@ -242,18 +287,54 @@ function AppContent() {
         </div>
       </aside>
       <div className={`${sidebarPinned ? 'lg:pl-[258px]' : 'lg:pl-[76px]'} print-content ${page === 'Class Schedule' ? 'print-page-schedule' : page === 'MIS Reports' ? 'print-page-mis-report' : page === 'Decision Support' ? 'print-page-decision-support' : page === 'Academic Results' ? 'print-page-academic-results' : ['Students', 'Teachers', 'Classes', 'Subjects', 'Users'].includes(page) ? 'print-page-record-list' : ''}`}>
-        <header className="no-print sticky top-0 z-10 grid min-h-[76px] grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2 border-b border-slate-200 bg-white/95 px-4 py-2 backdrop-blur sm:flex sm:h-[76px] sm:px-8">
+        <header className="no-print sticky top-0 z-10 grid min-h-[76px] grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2 border-b border-slate-200 bg-white/95 px-4 py-2 backdrop-blur sm:px-6 xl:flex xl:h-[76px] xl:px-8">
           <button type="button" className="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-slate-600 hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600 lg:hidden" onClick={() => setMobileOpen(true)} aria-label="Open navigation" aria-expanded={mobileOpen} aria-controls="app-sidebar"><Menu size={21} /></button>
-          <div className="min-w-0"><div className="truncate text-[11px] font-medium text-slate-400 sm:text-xs">School administration / <span className="text-slate-600">{page}</span></div><h1 className="mt-0.5 truncate text-lg font-bold text-navy">{page}</h1></div>
-          <div className="col-span-2 flex min-w-0 items-center gap-2 sm:ml-auto sm:w-auto sm:gap-3"><div className="min-w-0 flex-1 sm:w-[min(360px,28vw)] sm:flex-none"><GlobalSearch onSelect={result => {
+          <div className="flex min-w-0 items-center justify-between gap-2">
+            <div className="min-w-0"><div className="truncate text-[11px] font-medium text-slate-400 sm:text-xs">School administration / <span className="text-slate-600">{page}</span></div><h1 className="mt-0.5 truncate text-lg font-bold text-navy">{page}</h1></div>
+            <div className="flex shrink-0 items-center gap-2 xl:hidden">
+              <span className="whitespace-nowrap text-[11px] text-slate-500">{new Date().toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}</span>
+              <div className="grid h-9 w-9 place-items-center rounded-full bg-slate-100 text-navy"><UserRound size={17} /></div>
+            </div>
+          </div>
+          <div className="col-span-2 grid min-w-0 grid-cols-1 items-center gap-y-2 xl:ml-auto xl:flex xl:w-auto xl:gap-3">
+            {selectedHeaderAcademicYear && <div className="col-span-2 min-w-0 xl:col-span-1 xl:flex xl:items-center xl:gap-2">
+              <div className="mb-1 flex items-center justify-between xl:hidden">
+                <span className="text-xs font-semibold text-slate-600">Academic year</span>
+                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${academicYearStatusStyle}`}>{academicYearStatus}</span>
+              </div>
+              {canSwitchAcademicYear
+                ? <div className="min-w-0 xl:w-[210px] xl:flex-none">
+                  <SearchableSelect name="header_academic_year" label="Academic year" hideLabel
+                    options={headerMeta.academicYears || []} value={headerAcademicYearId}
+                    onChange={changeAcademicYear}
+                    getOptionLabel={year => `${year.name} · ${year.status || (year.is_current ? 'Current' : '')}`.trim()}
+                    getOptionSelectedLabel={year => year.name}
+                    getOptionSearchText={year => `${year.name} ${year.status || ''}`}
+                    placeholder="Search academic years..."
+                    emptyValueLabel={headerMeta.academicYear.name} />
+                </div>
+                : <div className="flex min-h-11 min-w-0 items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 xl:w-[210px] xl:flex-none"
+                  aria-label={`Current academic year: ${selectedHeaderAcademicYear.name}, status ${academicYearStatus}`}>
+                  <span className="truncate text-sm font-semibold text-slate-700">{selectedHeaderAcademicYear.name}</span>
+                  <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-bold ${academicYearStatusStyle}`}>{academicYearStatus}</span>
+                </div>}
+              {canSwitchAcademicYear && <span className={`hidden shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-bold xl:inline-flex ${academicYearStatusStyle}`}>{academicYearStatus}</span>}
+            </div>}
+            <div className="col-span-1 min-w-0 w-full xl:w-[min(360px,28vw)] xl:flex-none"><GlobalSearch onSelect={result => {
+            if (!confirmLeaveCurrentPage()) return;
             if (hasUnsavedChanges && !window.confirm('Discard unsaved timetable changes?')) return;
             setHasUnsavedChanges(false);
             setPage(result.page);
             setGlobalSearchResult(result);
-          }} /></div><span className="hidden text-sm text-slate-500 sm:block">{new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}</span><div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-slate-100 text-navy"><UserRound size={17} /></div></div>
+          }} /></div><span className="hidden whitespace-nowrap text-sm text-slate-500 xl:block">{new Date().toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}</span><div className="hidden h-9 w-9 place-items-center rounded-full bg-slate-100 text-navy xl:grid xl:shrink-0"><UserRound size={17} /></div></div>
         </header>
         {!['Dashboard', 'Class Schedule', 'Students', 'Teachers', 'Classes', 'Subjects', 'Users', 'Trash', 'Activity Logs', 'Settings', 'Attendance', 'Academic Results', 'MIS Reports', 'Decision Support'].includes(page) && <h1 className="print-only mx-auto mb-4 mt-2 max-w-[1500px] text-xl font-bold">{page}</h1>}
         <main className="mx-auto max-w-[1500px] p-4 sm:p-7">
+          {selectedHeaderAcademicYear && <div className="print-only global-print-academic-year">
+            <span>Academic year</span>
+            <strong>{selectedHeaderAcademicYear.name}</strong>
+            <span className="global-print-academic-year-status">{academicYearStatus}</span>
+          </div>}
           {globalSearchResult ? <DetailsPage
             title={`${globalSearchResult.category} details`}
             details={Object.entries(globalSearchResult)
@@ -262,16 +343,20 @@ function AppContent() {
                 key.replaceAll('_', ' ').replace(/\b\w/g, character => character.toUpperCase()), value
               ])}
             onBack={() => setGlobalSearchResult(null)}
-          /> : page === 'Dashboard' ? <Dashboard user={user} onError={setError} onSuccess={setSuccess} /> :
+          /> : page === 'Dashboard' ? <Dashboard key={headerAcademicYearId} user={user} selectedAcademicYearId={headerAcademicYearId} onError={setError} onSuccess={setSuccess} /> :
             page === 'MIS Reports' ? <Reports /> :
             page === 'Decision Support' ? <DecisionSupport /> :
-            page === 'Settings' ? <SettingsPage user={user} onError={setError} onSuccess={setSuccess} /> :
+            page === 'Settings' ? <SettingsPage user={user} onError={setError} onSuccess={setSuccess} onStartTransition={() => setPage('Academic Year Transition')} /> :
+            page === 'Academic Year Transition' ? <AcademicYearTransitionPage
+              onBack={() => setPage('Settings')}
+              onSuccess={setSuccess}
+            /> :
             page === 'Attendance' ? <AttendancePage user={user} onError={setError} onSuccess={setSuccess} /> :
             page === 'Academic Results' ? <ResultsPage user={user} onError={setError} onSuccess={setSuccess} /> :
             page === 'Students' ? <StudentsPage user={user} onError={setError} onSuccess={setSuccess} /> :
             page === 'Teachers' ? <TeachersPage user={user} onError={setError} onSuccess={setSuccess} /> :
             page === 'Classes' ? <ClassesPage user={user} onError={setError} onSuccess={setSuccess} /> :
-            page === 'Class Schedule' ? <ClassSchedulePage user={user} onError={setError} onSuccess={setSuccess} onDraftChange={setHasUnsavedChanges} /> :
+            page === 'Class Schedule' ? <ClassSchedulePage key={headerAcademicYearId} user={user} onError={setError} onSuccess={setSuccess} onDraftChange={setHasUnsavedChanges} /> :
             page === 'Subjects' ? <SubjectsPage user={user} onError={setError} onSuccess={setSuccess} /> :
             page === 'Users' ? <UsersPage user={user} onError={setError} onSuccess={setSuccess} /> :
             page === 'Trash' ? <TrashPage user={user} onError={setError} onSuccess={setSuccess} /> :
@@ -381,12 +466,12 @@ function DashboardChartTooltip({ active, payload, label, type, interval }) {
   </div>;
 }
 
-function Dashboard({ user }) {
+function Dashboard({ user, selectedAcademicYearId }) {
   const allTeacherScores = user.role === 'Teacher';
   const [period, setPeriod] = useState('180');
   const [classId, setClassId] = useState('');
   const [gradeLevel, setGradeLevel] = useState('');
-  const [academicYearId, setAcademicYearId] = useState('');
+  const academicYearId = selectedAcademicYearId;
   const [termId, setTermId] = useState('');
   const [subjectId, setSubjectId] = useState('');
   const [attendanceStatus, setAttendanceStatus] = useState('');
@@ -417,7 +502,7 @@ function Dashboard({ user }) {
   const attendanceMetricScope = period === 'custom'
     ? `${customFrom} to ${customTo}`
     : ({ '1': 'today', '30': 'the last 30 days', '180': 'the last 6 months', '365': 'the last 12 months' })[period] || 'the selected date range';
-  const gradeOptions = [...new Set((meta?.classes || []).map(row => row.grade_level))].sort();
+  const gradeOptions = (meta?.gradeLevels || []).map(grade => grade.name);
   const dashboardTerms = (meta?.dashboardTerms || []).filter(term =>
     !academicYearId || term.academic_year_id === academicYearId
   );
@@ -438,14 +523,13 @@ function Dashboard({ user }) {
     setPeriod('180');
     setClassId('');
     setGradeLevel('');
-    setAcademicYearId('');
     setTermId('');
     setSubjectId('');
     setAttendanceStatus('');
     setCustomFrom('');
     setCustomTo('');
   };
-  const hasFilters = period !== '180' || classId || gradeLevel || academicYearId || termId || subjectId || attendanceStatus;
+  const hasFilters = period !== '180' || classId || gradeLevel || termId || subjectId || attendanceStatus;
   const rangeLabel = data.range ? `${data.range.from} – ${data.range.to}` : periodLabel;
   const attendanceTotals = data.attendance.reduce((totals, row) => ({
     present: totals.present + row.present,
@@ -514,12 +598,6 @@ function Dashboard({ user }) {
           onChange={value => { setGradeLevel(value); setClassId(''); }}
           getOptionId={option => option} getOptionLabel={option => option} getOptionSearchText={option => option}
           placeholder="Search grades..." emptyValueLabel="All grades" noneLabel="All grades" debounceDelay={500} />
-      </div>
-      <div className="min-w-0">
-        <SearchableSelect name="dashboard_year" label="Academic year" options={meta?.academicYears || []} value={academicYearId}
-          onChange={value => { setAcademicYearId(value); setClassId(''); setTermId(''); }}
-          getOptionLabel={row => row.name} getOptionSearchText={row => row.name} placeholder="Search years..."
-          emptyValueLabel="All years" noneLabel="All years" debounceDelay={500} />
       </div>
       <div className="min-w-0">
         <SearchableSelect name="dashboard_term" label="Term" options={dashboardTerms} value={termId}
@@ -1706,7 +1784,7 @@ function DecisionSupport() {
   const path = customRangeInvalid ? null : `${apiRoutes.decisionSupport}?${query.toString()}`;
   const { data, error, loading } = useLoad(path);
   const classes = meta?.classes || [];
-  const grades = [...new Set(classes.map(row => row.grade_level).filter(Boolean))].sort();
+  const grades = (meta?.gradeLevels || []).map(grade => grade.name);
   const genders = ['Female', 'Male', 'Other'];
   const subjects = meta?.subjects || [];
   const matchesFilters = row =>
@@ -1929,7 +2007,7 @@ function ConfirmActionModal({ title, message, onCancel, onConfirm }) {
   </Modal>;
 }
 
-function SettingsPage({ user, onError, onSuccess }) {
+function SettingsPage({ user, onError, onSuccess, onStartTransition }) {
   const { data: meta, reload: reloadMeta } = useLoad(apiRoutes.meta);
   const { data, error, loading, reload } = useLoad(apiRoutes.gradingScales.collection);
   const terms = useLoad(apiRoutes.terms.collection);
@@ -2078,7 +2156,7 @@ function SettingsPage({ user, onError, onSuccess }) {
   }
   async function updateAcademicYearStatus(row, value) {
     const isCurrent = value === 'Current';
-    if (isCurrent === Boolean(row.is_current)) return;
+    if (value === row.status) return;
     try {
       await api(apiRoute(apiRoutes.academicYears.item, { id: row.id }), {
         method: 'PATCH',
@@ -2086,10 +2164,11 @@ function SettingsPage({ user, onError, onSuccess }) {
           name: row.name,
           start_date: String(row.start_date).slice(0, 10),
           end_date: String(row.end_date).slice(0, 10),
-          is_current: isCurrent
+          is_current: isCurrent,
+          status: value
         })
       });
-      onSuccess(`${row.name} ${isCurrent ? 'set as current' : 'removed as current'} academic year.`);
+      onSuccess(`${row.name} status changed to ${value}.`);
       reloadMeta();
     } catch (err) {
       onError(err.message);
@@ -2098,7 +2177,7 @@ function SettingsPage({ user, onError, onSuccess }) {
   }
   const formPage = yearFormOpen || termFormOpen || scaleFormOpen;
   const visibleAcademicYears = (meta?.academicYears || []).filter(year =>
-    (!academicYearStatus || (year.is_current ? 'Current' : 'Not current') === academicYearStatus) &&
+    (!academicYearStatus || year.status === academicYearStatus) &&
     (!debouncedYearSearch.trim() || fuzzySearchScore(debouncedYearSearch, `${year.name} ${year.start_date} ${year.end_date}`) !== null)
   );
   const visibleTerms = (terms.data || []).filter(term =>
@@ -2148,7 +2227,7 @@ function SettingsPage({ user, onError, onSuccess }) {
     {isAdministrator && <div className="no-print sims-panel">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div><h2 className="font-semibold">Academic years</h2><p className="mt-1 text-sm text-slate-500">Manage school-year dates and choose the current year.</p></div>
-        <div className="flex flex-wrap gap-2"><PrintButton label="Print academic years" disabled={!meta || !visibleAcademicYears.length} onClick={() => printSettingsTable('settings-years')} /><button type="button" onClick={() => openYearForm()} className="primary-action flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold"><Plus size={16} /> Add academic year</button></div>
+        <div className="flex flex-wrap gap-2"><PrintButton label="Print academic years" disabled={!meta || !visibleAcademicYears.length} onClick={() => printSettingsTable('settings-years')} /><button type="button" onClick={onStartTransition} className="primary-action flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold"><Plus size={16} /> Start new academic year</button><button type="button" onClick={() => openYearForm()} className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold"><Plus size={16} /> Add year only</button></div>
       </div>
       <div className="sims-filter-grid mb-4">
       <SearchSuggestions id="settings-year-search" label="Search academic years" value={yearSearch}
@@ -2156,7 +2235,7 @@ function SettingsPage({ user, onError, onSuccess }) {
         placeholder="Search year or date..." inputClassName="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5" />
       <label className="block min-w-0 text-sm font-medium text-slate-700">Status
         <select value={academicYearStatus} onChange={event => setAcademicYearStatus(event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5">
-          <option value="">All statuses</option><option value="Current">Current</option><option value="Not current">Not current</option>
+          <option value="">All statuses</option><option value="Upcoming">Upcoming</option><option value="Current">Current</option><option value="Closed">Closed</option>
         </select>
       </label>
       <button type="button" disabled={!yearSearch && !academicYearStatus} onClick={() => { setYearSearch(''); setAcademicYearStatus(''); }} className="self-end rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50">Clear filters</button>
@@ -2165,7 +2244,7 @@ function SettingsPage({ user, onError, onSuccess }) {
         <thead className="border-b border-slate-200 text-xs uppercase"><tr>{['Academic year','Start date','End date','Status','Actions'].map(label => <th key={label} className="px-4 py-3">{label}</th>)}</tr></thead>
         <tbody className="divide-y divide-slate-100">{pageAcademicYears.map(row => <tr key={row.id} className="hover:bg-slate-50/70">
           <td className="px-4 py-3 font-medium">{row.name}</td><td className="px-4 py-3">{formatDate(row.start_date)}</td><td className="px-4 py-3">{formatDate(row.end_date)}</td>
-          <td className="px-4 py-3"><StatusSelect label={`Change status for academic year ${row.name}`} value={row.is_current ? 'Current' : 'Not current'} options={['Current', 'Not current']} onChange={value => updateAcademicYearStatus(row, value)} /></td>
+          <td className="px-4 py-3"><StatusSelect label={`Change status for academic year ${row.name}`} value={row.status || (row.is_current ? 'Current' : 'Upcoming')} options={['Upcoming', 'Current', 'Closed']} onChange={value => updateAcademicYearStatus(row, value)} /></td>
           <td className="px-4 py-3"><ActionMenu label={`Actions for academic year ${row.name}`} items={[
             { label: 'View details', onClick: () => setSelectedYear(row) },
             { label: 'Edit', onClick: () => openYearForm(row) },
@@ -2220,7 +2299,7 @@ function SettingsPage({ user, onError, onSuccess }) {
       {isAdministrator && <section className="print-only settings-print-output settings-print-years">
         <h1 className="mb-1 text-xl font-bold">Academic years</h1><p className="mb-3 text-xs">Printed {formatDateTime(new Date())} · {visibleAcademicYears.length} matching records</p>
         <table className="print-table"><thead><tr>{['Academic year', 'Start date', 'End date', 'Status'].map(label => <th key={label}>{label}</th>)}<th className="print-other-column">Other</th></tr></thead>
-          <tbody>{visibleAcademicYears.map(row => <tr key={row.id}><td>{row.name}</td><td>{formatDate(row.start_date)}</td><td>{formatDate(row.end_date)}</td><td>{row.is_current ? 'Current' : 'Not current'}</td><td className="print-other-column"></td></tr>)}</tbody>
+          <tbody>{visibleAcademicYears.map(row => <tr key={row.id}><td>{row.name}</td><td>{formatDate(row.start_date)}</td><td>{formatDate(row.end_date)}</td><td>{row.status || (row.is_current ? 'Current' : 'Upcoming')}</td><td className="print-other-column"></td></tr>)}</tbody>
         </table>
       </section>}
       <section className="print-only settings-print-output settings-print-terms">
@@ -2316,6 +2395,29 @@ function SettingsPage({ user, onError, onSuccess }) {
       </div>
     </Modal>}
   </div>;
+}
+
+function AcademicYearTransitionPage({ onBack, onSuccess }) {
+  const { data: meta, error, loading } = useLoad(apiRoutes.meta);
+  if (loading || !meta) {
+    return <section className="flex min-h-[70vh] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 shadow-sm" aria-labelledby="transition-page-title">
+      <header className="border-b border-slate-200 bg-white px-4 py-4 sm:px-6">
+        <button type="button" onClick={onBack} className="mb-3 inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900"><ArrowLeft size={16} /> Back to academic years</button>
+        <p className="text-xs font-bold uppercase tracking-wider text-blue-700">Academic year setup</p>
+        <h2 id="transition-page-title" className="mt-1 text-xl font-bold text-slate-900">Start a new academic year</h2>
+        <p className="mt-1 text-sm text-slate-500">Set up dates, classes, student placements, and draft schedules in one guided process.</p>
+      </header>
+      <main className="flex min-h-0 flex-1 items-center justify-center p-4 sm:p-6">
+        {error ? <div className="w-full max-w-2xl"><ErrorPanel message={error} /></div> : <Loading />}
+      </main>
+    </section>;
+  }
+  return <AcademicYearTransitionWizard
+    academicYears={meta.academicYears || []}
+    currentYearId={meta.academicYear?.id}
+    onClose={onBack}
+    onComplete={result => onSuccess(`Academic year transition completed. New year status: ${result.status}.`)}
+  />;
 }
 
 function AssessmentInput({ name, label, type = 'text', required = false, defaultValue, min, max, step, maxLength, error = '' }) {

@@ -78,7 +78,9 @@ router.get(apiRoutes.dashboard, expensiveLimiter, academic, async (req, res) => 
   }
 
   const classId = filters.class_id ? await resolvePublicId(pool, 'classes', filters.class_id, 400) : null;
-  const yearId = filters.academic_year_id ? await resolvePublicId(pool, 'academic_years', filters.academic_year_id, 400) : null;
+  const yearId = filters.academic_year_id
+    ? await resolvePublicId(pool, 'academic_years', filters.academic_year_id, 400)
+    : req.academicYearId ?? 0;
   const termId = filters.term_id ? await resolvePublicId(pool, 'terms', filters.term_id, 400) : null;
   const subjectId = filters.subject_id ? await resolvePublicId(pool, 'subjects', filters.subject_id, 400) : null;
   const teacherId = await linkedTeacherId(req);
@@ -122,7 +124,7 @@ router.get(apiRoutes.dashboard, expensiveLimiter, academic, async (req, res) => 
     pool.execute(`
       SELECT COUNT(DISTINCT s.id) AS students
       FROM students s
-      JOIN student_enrollments e ON e.student_id = s.id AND e.current = 1
+      JOIN student_enrollments e ON e.student_id = s.id AND e.current = 1 AND e.enrollment_type = 'Homeroom'
       JOIN classes c ON c.id = e.class_id AND c.is_deleted = 0
       WHERE s.status = 'Active' AND s.is_deleted = 0 ${studentScope.sql}
         ${teacherId ? 'AND EXISTS (SELECT 1 FROM teacher_assignments scoped WHERE scoped.class_id = c.id AND scoped.teacher_id = ? AND scoped.active = 1)' : ''}
@@ -185,7 +187,7 @@ router.get(apiRoutes.dashboard, expensiveLimiter, academic, async (req, res) => 
       FROM student_enrollments e
       JOIN students s ON s.id = e.student_id AND s.is_deleted = 0
       JOIN classes c ON c.id = e.class_id AND c.is_deleted = 0
-      WHERE e.enrollment_date BETWEEN ? AND ? ${enrollmentClassScope.sql}
+      WHERE e.enrollment_type = 'Homeroom' AND e.enrollment_date BETWEEN ? AND ? ${enrollmentClassScope.sql}
         ${yearId ? 'AND e.academic_year_id = ?' : ''}
         ${enrollmentTeacherScope}
       GROUP BY month ORDER BY month
@@ -284,7 +286,7 @@ router.get(apiRoutes.meta, academic, async (req, res) => {
     pool.execute(`
     SELECT c.id, c.name, c.grade_level, c.capacity, c.academic_year_id, ay.name AS academic_year,
       c.homeroom_teacher_id, teacher.full_name AS homeroom_teacher,
-      (SELECT COUNT(*) FROM student_enrollments e JOIN students s ON s.id = e.student_id
+      (SELECT COUNT(DISTINCT e.student_id) FROM student_enrollments e JOIN students s ON s.id = e.student_id
        WHERE e.class_id = c.id AND e.current = 1 AND s.status = 'Active' AND s.is_deleted = 0) AS student_count
     FROM classes c JOIN academic_years ay ON ay.id = c.academic_year_id
     LEFT JOIN teachers teacher ON teacher.id = c.homeroom_teacher_id AND teacher.is_deleted = 0
@@ -332,7 +334,8 @@ router.get(apiRoutes.meta, academic, async (req, res) => {
   `, [teacherId, teacherId]),
     pool.execute(`
     SELECT s.id, s.student_code, s.english_name, e.class_id FROM students s
-    JOIN student_enrollments e ON e.student_id = s.id AND e.current = 1 WHERE s.status = 'Active' AND s.is_deleted = 0
+    JOIN student_enrollments e ON e.student_id = s.id AND e.current = 1 AND e.enrollment_type = 'Homeroom'
+    WHERE s.status = 'Active' AND s.is_deleted = 0
       AND (? IS NULL OR EXISTS (SELECT 1 FROM teacher_assignments ta
         WHERE ta.teacher_id = ? AND ta.class_id = e.class_id AND ta.active = 1))
     ORDER BY s.english_name

@@ -43,9 +43,15 @@ export const academicYearInput = z.object({
   name: z.string().trim().min(1).max(30),
   start_date: z.string().date(),
   end_date: z.string().date(),
-  is_current: z.boolean().default(false)
-}).refine(value => value.end_date > value.start_date, {
-  path: ['end_date'], message: 'End date must be after start date'
+  is_current: z.boolean().default(false),
+  status: z.enum(['Upcoming', 'Current', 'Closed']).optional()
+}).superRefine((value, context) => {
+  if (value.end_date <= value.start_date) {
+    context.addIssue({ code: 'custom', path: ['end_date'], message: 'End date must be after start date' });
+  }
+  if (value.is_current !== (value.status === 'Current') && value.status !== undefined) {
+    context.addIssue({ code: 'custom', path: ['status'], message: 'Current status must match the current-year selection' });
+  }
 });
 
 function formatValidationIssue(issue) {

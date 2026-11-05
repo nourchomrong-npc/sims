@@ -116,6 +116,19 @@ select:focus-visible, input:focus-visible, textarea:focus-visible, button:focus-
   body[data-print-target="settings-scales"] .settings-print-scales { display: block !important; }
   .print-content { padding: 0 !important; }
   .print-content > main { padding: 10mm !important; }
+  .global-print-academic-year {
+    display: flex !important;
+    align-items: baseline;
+    gap: .4rem;
+    margin-bottom: .65rem;
+    border-bottom: 1px solid #cbd5e1;
+    padding-bottom: .35rem;
+    color: #475569;
+    font-size: 8pt;
+    break-inside: avoid;
+  }
+  .global-print-academic-year strong { color: #172b4d; font-size: 9pt; }
+  .global-print-academic-year-status { color: #64748b; }
   .print-page-schedule > main { padding: 5mm !important; }
   .print-content, .print-content main { height: auto !important; min-height: 0 !important; overflow: visible !important; }
   .print-page-mis-report { page: misreport; }

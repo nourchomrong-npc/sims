@@ -46,6 +46,10 @@ The migration choice for the current Aiven-to-Supabase move is **fresh database*
 
 Schema changes are explicit operator actions; they do not run automatically during application startup. Review and test future PostgreSQL DDL on a staging database and take a backup before applying it to production. `CREATE TABLE IF NOT EXISTS` does not repair an existing partial or incompatible schema; inspect the target before rerunning schema setup.
 
+For existing PostgreSQL installations, apply [`migrate_academic_year_transition.postgres.sql`](./server/database/migrate_academic_year_transition.postgres.sql) before deploying Academic Year Transition. It aligns `is_current` and the `Upcoming`/`Current`/`Closed` status, adds subject-specific enrollment and separate transition/promotion/outcome records, and links attendance and scores to the applicable enrollment. It preserves historical enrollments and results; it does not copy attendance, assessments, scores, or results.
+
+For existing PostgreSQL installations, also apply [`migrate_grades_table.postgres.sql`](./server/database/migrate_grades_table.postgres.sql) before deploying grade-catalogue-backed class forms or Academic Year Transition. It creates the persisted `grades` catalogue with Grade K–12, retains and migrates existing class grade labels, and adds a foreign key from `classes.grade_level` to the catalogue. Fresh PostgreSQL databases receive this table from `schema.postgres.sql`.
+
 ## Local-backend synchronization
 
 The existing cloud application remains unchanged. Synchronization is performed only by the school-LAN local backend, which connects directly to local and cloud PostgreSQL using server-side credentials. `DB_MODE=LOCAL` and `DB_MODE=CLOUD` select one active database without synchronization; `DB_MODE=HYBRID` uses local PostgreSQL for application requests and synchronizes both ways. Lowercase `local_only`, `cloud_only`, and `hybrid` aliases are also accepted. `LOCAL_DB_*` and `CLOUD_DB_*` configure distinct database connections. Cloud TLS certificate verification cannot be disabled; configure `CLOUD_DB_SSL_CA` if the system trust store does not contain the issuing CA.

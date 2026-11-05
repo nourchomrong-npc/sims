@@ -1,7 +1,7 @@
 import { isValidElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, ArrowLeft, Check, ChevronDown, LoaderCircle, MoreVertical, Printer, Search, X } from 'lucide-react';
 import { createPortal } from 'react-dom';
-import { api } from '../services/api.js';
+import { api, useAcademicYearContext } from '../services/api.js';
 import { dateInputValue, formatDate, formatDateTime, formatDisplayValue, formatTime } from './dateFormatting.js';
 export { fuzzySearchScore } from './searchMatching.js';
 import { fuzzySearchScore } from './searchMatching.js';
@@ -138,6 +138,7 @@ export function SearchableSelect({
   value = '',
   onChange,
   getOptionLabel,
+  getOptionSelectedLabel,
   getOptionId = option => option.id,
   getOptionDetails = () => [],
   getOptionSearchText,
@@ -148,19 +149,57 @@ export function SearchableSelect({
   debounceDelay = 500,
   disabled = false,
   required = false,
-  error = ''
+  error = '',
+  hideLabel = false
 }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState(null);
+  const inputRef = useRef(null);
   const debouncedQuery = useDebouncedValue(query, debounceDelay);
   const selectedOption = options.find(option => String(getOptionId(option)) === String(value));
-  const selectedLabel = selectedOption ? getOptionLabel(selectedOption) : emptyValueLabel;
+  const selectedLabel = selectedOption
+    ? (getOptionSelectedLabel?.(selectedOption) || getOptionLabel(selectedOption))
+    : emptyValueLabel;
   const selectedDetails = selectedOption ? getOptionDetails(selectedOption).filter(detail => detail.value) : [];
   const filteredOptions = useMemo(() => {
     const normalizedQuery = debouncedQuery.trim().toLowerCase();
     if (!normalizedQuery) return options;
     return options.filter(option => (getOptionSearchText?.(option) || getOptionLabel(option)).toLowerCase().includes(normalizedQuery));
   }, [options, debouncedQuery, getOptionLabel, getOptionSearchText]);
+
+  useLayoutEffect(() => {
+    if (!open || disabled) return undefined;
+
+    function updateMenuPosition() {
+      const bounds = inputRef.current?.getBoundingClientRect();
+      if (!bounds) return;
+
+      const spacing = 4;
+      const maxMenuHeight = 240;
+      const availableAbove = Math.max(0, bounds.top - spacing);
+      const availableBelow = Math.max(0, window.innerHeight - bounds.bottom - spacing);
+      const opensAbove = availableBelow < maxMenuHeight && availableAbove > availableBelow;
+      const availableHeight = opensAbove ? availableAbove : availableBelow;
+      const width = Math.min(bounds.width, window.innerWidth - spacing * 2);
+
+      setMenuPosition({
+        left: Math.max(spacing, Math.min(bounds.left, window.innerWidth - width - spacing)),
+        width,
+        top: opensAbove ? undefined : bounds.bottom + spacing,
+        bottom: opensAbove ? window.innerHeight - bounds.top + spacing : undefined,
+        maxHeight: Math.min(maxMenuHeight, availableHeight)
+      });
+    }
+
+    updateMenuPosition();
+    window.addEventListener('resize', updateMenuPosition);
+    window.addEventListener('scroll', updateMenuPosition, true);
+    return () => {
+      window.removeEventListener('resize', updateMenuPosition);
+      window.removeEventListener('scroll', updateMenuPosition, true);
+    };
+  }, [open, disabled]);
 
   function handleKeyDown(event) {
     if (event.key === 'Escape') {
@@ -174,13 +213,14 @@ export function SearchableSelect({
   }
 
   return <div className="relative text-sm font-medium text-slate-700">
-    <label htmlFor={`searchable-${name}`}>{label}</label>
+    <label htmlFor={`searchable-${name}`} className={hideLabel ? 'sr-only' : undefined}>{label}</label>
     <input type="hidden" name={name} value={value || ''} data-searchable-select="true" required={required} />
     <div className="relative mt-1.5">
-      <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+      {open && <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />}
       <input
         type="search"
         id={`searchable-${name}`}
+        ref={inputRef}
         role="combobox"
         aria-label={label}
         aria-autocomplete="list"
@@ -190,6 +230,12 @@ export function SearchableSelect({
         placeholder={placeholder}
         maxLength={100}
         disabled={disabled}
+        onClick={() => {
+          if (!open) {
+            setQuery('');
+            setOpen(true);
+          }
+        }}
         onFocus={() => { setQuery(''); setOpen(true); }}
         onBlur={event => {
           if (!event.currentTarget.parentElement?.contains(event.relatedTarget)) setOpen(false);
@@ -202,7 +248,7 @@ export function SearchableSelect({
         }}
         aria-invalid={Boolean(error)}
         aria-describedby={error ? `${name}-error` : undefined}
-        className={`block w-full rounded-lg border bg-white py-2.5 pl-9 pr-10 text-sm outline-none focus:border-blue-500 disabled:bg-slate-100 ${error ? 'border-red-400' : 'border-slate-300'}`}
+        className={`block w-full rounded-lg border bg-white py-2.5 pr-10 text-sm outline-none focus:border-blue-500 disabled:bg-slate-100 ${open ? 'cursor-text pl-9' : 'cursor-pointer pl-3'} ${error ? 'border-red-400' : 'border-slate-300'}`}
       />
       <ChevronDown size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
     </div>
@@ -213,7 +259,19 @@ export function SearchableSelect({
         <dd className="inline break-words font-normal text-slate-700">{detail.value}</dd>
       </div>)}
     </dl>}
-    {open && !disabled && <div id={`${name}-options`} role="listbox" aria-label={`${label} options`} className="absolute z-30 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+    {open && !disabled && menuPosition && createPortal(<div
+      id={`${name}-options`}
+      role="listbox"
+      aria-label={`${label} options`}
+      className="fixed z-[100] overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+      style={{
+        left: menuPosition.left,
+        width: menuPosition.width,
+        top: menuPosition.top,
+        bottom: menuPosition.bottom,
+        maxHeight: menuPosition.maxHeight
+      }}
+    >
       <button type="button" role="option" aria-selected={!value} onMouseDown={event => event.preventDefault()} onClick={() => { onChange(''); setQuery(''); setOpen(false); }} className="w-full px-3 py-2 text-left text-sm text-slate-500 hover:bg-slate-50">
         {noneLabel || (required ? 'Select...' : 'None')}
       </button>
@@ -235,7 +293,7 @@ export function SearchableSelect({
         {String(getOptionId(option)) === String(value) && <Check size={15} className="mt-0.5 shrink-0 text-blue-700" />}
       </button>)}
       {!filteredOptions.length && <div className="px-3 py-2 text-sm text-slate-500">{emptyLabel}</div>}
-    </div>}
+    </div>, document.body)}
   </div>;
 }
 
@@ -246,7 +304,7 @@ export function Notice({ message, type, onClose }) {
     const timeout = setTimeout(() => {
       setVisible(false);
       onClose?.();
-    }, 2000);
+    }, 500);
     return () => clearTimeout(timeout);
   }, [message, type]);
   if (!visible) return null;
@@ -263,6 +321,7 @@ export function useLoad(path) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const request = useRef(null);
+  const academicYearContext = useAcademicYearContext();
   const reload = useCallback(() => {
     request.current?.abort();
     if (!path) {
@@ -282,7 +341,7 @@ export function useLoad(path) {
       .finally(() => {
         if (request.current === controller) setLoading(false);
       });
-  }, [path]);
+  }, [academicYearContext, path]);
   useEffect(() => {
     reload();
     return () => {

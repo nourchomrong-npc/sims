@@ -25,6 +25,9 @@ test('user management follows the SuperAdmin, Admin, and School Manager role hie
   let listQuery = '';
   let listParams = [];
   pool.execute = async (sql, params = []) => {
+    if (sql.includes('SELECT id, public_id FROM academic_years WHERE is_current = 1 LIMIT 1')) {
+      return [[{ id: 1, public_id: 'cf4dfdf6-bae4-45de-9a5d-c2a89a80e234' }], []];
+    }
     if (sql.includes('SELECT active, is_deleted FROM users WHERE id = ?')) return [[{ active: true, is_deleted: false }], []];
     if (sql.includes('SELECT id FROM users WHERE public_id = ?')) return [[{ id: 9 }], []];
     if (sql.includes('SELECT COUNT(*) AS total') && sql.includes('FROM users u')) {
@@ -121,6 +124,10 @@ test('user management follows the SuperAdmin, Admin, and School Manager role hie
 
   role = 'School Manager';
   targetRole = 'School Manager';
+  response = await fetch(`${baseUrl}/users?page=1&page_size=25`, {
+    headers: { 'X-Academic-Year-Id': 'c7a8a10b-d1e9-4c87-8fed-0d8c998ed4a1' }
+  });
+  assert.equal(response.status, 403, 'School Manager cannot switch away from the current academic year');
   response = await fetch(`${baseUrl}/users?page=1&page_size=25`);
   assert.equal(response.status, 200);
   assert.match(listQuery, /u\.role IN \(\?\)/);

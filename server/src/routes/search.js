@@ -17,14 +17,14 @@ async function linkedTeacherId(req) {
   return teacher.id;
 }
 
-function teacherAssignmentFilter(teacherId, classColumn, subjectColumn = null) {
+function teacherAssignmentFilter(teacherId, classColumn, subjectColumn = null, academicYearId) {
   if (!teacherId) return { sql: '', params: [] };
   return {
     sql: ` AND EXISTS (SELECT 1 FROM teacher_assignments scoped_assignment
       WHERE scoped_assignment.teacher_id = ? AND scoped_assignment.class_id = ${classColumn}
         ${subjectColumn ? `AND scoped_assignment.subject_id = ${subjectColumn}` : ''}
-        AND scoped_assignment.active = 1)`,
-    params: [teacherId]
+        AND scoped_assignment.academic_year_id = ? AND scoped_assignment.active = 1)`,
+    params: [teacherId, academicYearId]
   };
 }
 
@@ -32,13 +32,14 @@ router.get(apiRoutes.search, academic, async (req, res) => {
   const { q } = z.object({ q: z.string().trim().min(2).max(100) }).parse(req.query);
   const pattern = `%${q}%`;
   const teacherId = await linkedTeacherId(req);
-  const studentScope = teacherAssignmentFilter(teacherId, 'e.class_id');
-  const classScope = teacherAssignmentFilter(teacherId, 'c.id');
-  const subjectScope = teacherAssignmentFilter(teacherId, 'ta.class_id', 'ta.subject_id');
-  const scheduleScope = teacherAssignmentFilter(teacherId, 'schedule.class_id', 'schedule.subject_id');
+  const academicYearId = req.academicYearId ?? 0;
+  const studentScope = teacherAssignmentFilter(teacherId, 'e.class_id', null, academicYearId);
+  const classScope = teacherAssignmentFilter(teacherId, 'c.id', null, academicYearId);
+  const subjectScope = teacherAssignmentFilter(teacherId, 'ta.class_id', 'ta.subject_id', academicYearId);
+  const scheduleScope = teacherAssignmentFilter(teacherId, 'schedule.class_id', 'schedule.subject_id', academicYearId);
   const scheduleTeacherScope = teacherId ? ' AND schedule.teacher_id = ?' : '';
-  const attendanceScope = teacherAssignmentFilter(teacherId, 'ar.class_id', 'ar.subject_id');
-  const assessmentScope = teacherAssignmentFilter(teacherId, 'a.class_id', 'a.subject_id');
+  const attendanceScope = teacherAssignmentFilter(teacherId, 'ar.class_id', 'ar.subject_id', academicYearId);
+  const assessmentScope = teacherAssignmentFilter(teacherId, 'a.class_id', 'a.subject_id', academicYearId);
   const queryRows = async (sql, params) => (await pool.execute(sql, params))[0];
 
   const [students, classes, subjects, schedules, attendance, results, teachers] = await Promise.all([
@@ -47,24 +48,27 @@ router.get(apiRoutes.search, academic, async (req, res) => {
         c.name AS class_name, c.grade_level, 'Students' AS page, 'Student' AS category
       FROM students s
       LEFT JOIN student_enrollments e ON e.student_id = s.id AND e.current = 1
+        AND e.enrollment_type = 'Homeroom'
+        AND e.academic_year_id = ?
       LEFT JOIN classes c ON c.id = e.class_id AND c.is_deleted = 0
       WHERE s.is_deleted = 0 AND s.status = 'Active'
         AND (s.student_code LIKE ? OR s.english_name LIKE ? OR COALESCE(s.khmer_name, '') LIKE ?
           OR COALESCE(s.phone, '') LIKE ? OR COALESCE(s.email, '') LIKE ? OR COALESCE(c.name, '') LIKE ?)
         ${studentScope.sql}
       ORDER BY s.english_name LIMIT 5
-    `, [pattern, pattern, pattern, pattern, pattern, pattern, ...studentScope.params]),
+    `, [academicYearId, pattern, pattern, pattern, pattern, pattern, pattern, ...studentScope.params]),
     queryRows(`
       SELECT c.public_id AS id, c.name, c.grade_level, ay.name AS academic_year,
-        (SELECT COUNT(*) FROM student_enrollments e JOIN students s ON s.id = e.student_id
+        (SELECT COUNT(DISTINCT e.student_id) FROM student_enrollments e JOIN students s ON s.id = e.student_id
           WHERE e.class_id = c.id AND e.current = 1 AND s.status = 'Active' AND s.is_deleted = 0) AS student_count,
         'Classes' AS page, 'Class' AS category
       FROM classes c JOIN academic_years ay ON ay.id = c.academic_year_id
       WHERE c.is_deleted = 0 AND c.active = 1
+        AND c.academic_year_id = ?
         AND (c.name LIKE ? OR c.grade_level LIKE ? OR ay.name LIKE ?)
         ${classScope.sql}
       ORDER BY c.grade_level, c.name LIMIT 5
-    `, [pattern, pattern, pattern, ...classScope.params]),
+    `, [academicYearId, pattern, pattern, pattern, ...classScope.params]),
     queryRows(`
       SELECT DISTINCT sub.public_id AS id, sub.code, sub.name, sub.description,
         'Subjects' AS page, 'Subject' AS category
@@ -84,12 +88,13 @@ router.get(apiRoutes.search, academic, async (req, res) => {
       JOIN subjects sub ON sub.id = schedule.subject_id AND sub.is_deleted = 0
       JOIN teachers teacher ON teacher.id = schedule.teacher_id AND teacher.is_deleted = 0
       WHERE schedule.is_deleted = 0 AND schedule.active = 1
+        AND c.academic_year_id = ?
         AND (c.name LIKE ? OR c.grade_level LIKE ? OR sub.name LIKE ? OR sub.code LIKE ?
           OR teacher.full_name LIKE ? OR COALESCE(schedule.room, '') LIKE ?)
         ${scheduleTeacherScope}
         ${scheduleScope.sql}
       ORDER BY c.grade_level, c.name, schedule.day_of_week, schedule.start_time LIMIT 5
-    `, [pattern, pattern, pattern, pattern, pattern, pattern, ...(teacherId ? [teacherId] : []), ...scheduleScope.params]),
+    `, [academicYearId, pattern, pattern, pattern, pattern, pattern, pattern, ...(teacherId ? [teacherId] : []), ...scheduleScope.params]),
     queryRows(`
       SELECT ar.public_id AS id, ar.attendance_date, ar.status, s.student_code, s.english_name,
         c.name AS class_name, c.grade_level, sub.name AS subject, 'Attendance' AS page, 'Attendance' AS category
@@ -97,11 +102,12 @@ router.get(apiRoutes.search, academic, async (req, res) => {
       JOIN students s ON s.id = ar.student_id AND s.is_deleted = 0
       JOIN classes c ON c.id = ar.class_id AND c.is_deleted = 0
       LEFT JOIN subjects sub ON sub.id = ar.subject_id
-      WHERE (s.student_code LIKE ? OR s.english_name LIKE ? OR c.name LIKE ? OR COALESCE(sub.name, '') LIKE ?
+      WHERE c.academic_year_id = ?
+        AND (s.student_code LIKE ? OR s.english_name LIKE ? OR c.name LIKE ? OR COALESCE(sub.name, '') LIKE ?
         OR ar.status LIKE ? OR CAST(ar.attendance_date AS TEXT) LIKE ?)
         ${attendanceScope.sql}
       ORDER BY ar.attendance_date DESC LIMIT 5
-    `, [pattern, pattern, pattern, pattern, pattern, pattern, ...attendanceScope.params]),
+    `, [academicYearId, pattern, pattern, pattern, pattern, pattern, pattern, ...attendanceScope.params]),
     queryRows(`
       SELECT ss.public_id AS id, s.student_code, s.english_name, a.title AS assessment,
         sub.name AS subject, c.name AS class_name, t.name AS term_name, ss.score,
@@ -113,11 +119,12 @@ router.get(apiRoutes.search, academic, async (req, res) => {
       JOIN subjects sub ON sub.id = a.subject_id AND sub.is_deleted = 0
       JOIN classes c ON c.id = a.class_id AND c.is_deleted = 0
       JOIN terms t ON t.id = a.term_id
-      WHERE (s.student_code LIKE ? OR s.english_name LIKE ? OR a.title LIKE ? OR sub.name LIKE ?
+      WHERE c.academic_year_id = ?
+        AND (s.student_code LIKE ? OR s.english_name LIKE ? OR a.title LIKE ? OR sub.name LIKE ?
         OR c.name LIKE ? OR t.name LIKE ?)
         ${assessmentScope.sql}
       ORDER BY a.assessment_date DESC, s.english_name LIMIT 5
-    `, [pattern, pattern, pattern, pattern, pattern, pattern, ...assessmentScope.params]),
+    `, [academicYearId, pattern, pattern, pattern, pattern, pattern, pattern, ...assessmentScope.params]),
     teacherId ? Promise.resolve([]) : queryRows(`
       SELECT public_id AS id, teacher_code, full_name, email, phone, employment_status,
         'Teachers' AS page, 'Teacher' AS category

@@ -1,4 +1,5 @@
 import { apiRoutes } from './apiRoutes.js';
+import { transactionalMutation } from '../utils/transactions.js';
 
 export function registerAuthRoutes(router, context) {
   const { bcrypt, z, pool, requireAuth, loginLimiter, sensitiveAuthLimiter, logActivity, resolvePublicId, idParam, loginInput, parse, publicId, superAdmin, verifyPassword, publicUser, resetUserPassword } = context;
@@ -74,7 +75,7 @@ export function registerAuthRoutes(router, context) {
     res.json({ success: true });
   });
   router.get(apiRoutes.auth.me, requireAuth, (req, res) => res.json({ user: publicUser(req.session.user) }));
-  router.post(apiRoutes.auth.password, sensitiveAuthLimiter, requireAuth, async (req, res) => {
+  router.post(apiRoutes.auth.password, sensitiveAuthLimiter, requireAuth, transactionalMutation(pool, async (req, res) => {
     const { new_password } = parse(z.object({
       new_password: z.string().min(12).max(200)
     }), req.body);
@@ -83,7 +84,7 @@ export function registerAuthRoutes(router, context) {
     req.session.user.must_change_password = false;
     await logActivity(pool, req.session.user.internalId, 'password_changed', 'user', req.session.user.internalId);
     res.json({ success: true });
-  });
+  }));
   router.post(apiRoutes.auth.passwordReset, sensitiveAuthLimiter, superAdmin, async (req, res) => {
     const { user_id } = parse(z.object({
       user_id: publicId

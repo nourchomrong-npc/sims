@@ -1,4 +1,5 @@
 import { apiRoutes } from './apiRoutes.js';
+import { transactionalMutation } from '../utils/transactions.js';
 
 export function registerClassesRoutes(router, context) {
   const { z, pool, activityRecordSnapshot, logActivity, publicIdFor, publicizeRows, resolvePublicId, resolvePublicIds, displayNameSchema, idParam, parse, publicId, schoolManager, academic, includeDeletedRecords, linkedTeacherId, teacherAssignmentFilter, createdAtQuery, createdAtFilter, createdAtOrder, requestedPage, classScheduleInput, validateScheduleAssignment, validateClassSchedule, resolveClassScheduleIds, classScheduleTimeSlotInput, classTimeSlotError, scheduleBatchInput, internalDeleteIdsHasId } = context;
@@ -17,7 +18,9 @@ export function registerClassesRoutes(router, context) {
     const createdRange = createdAtFilter(createdFilters, 'c.created_at');
     const page = requestedPage(req);
     const search = filters.q ? `%${filters.q}%` : null;
-    const academicYearId = filters.academic_year_id ? await resolvePublicId(pool, 'academic_years', filters.academic_year_id, 400) : null;
+    const academicYearId = filters.academic_year_id
+      ? await resolvePublicId(pool, 'academic_years', filters.academic_year_id, 400)
+      : req.academicYearId ?? 0;
     const homeroomTeacherId = filters.teacher_id ? await resolvePublicId(pool, 'teachers', filters.teacher_id, 400) : null;
     const fromWhere = `
       FROM classes c JOIN academic_years ay ON ay.id = c.academic_year_id
@@ -61,12 +64,17 @@ export function registerClassesRoutes(router, context) {
     if (page) return res.json({ rows, total: Number(countResult[0][0].total), page: page.page, page_size: page.pageSize });
     res.json(rows);
   });
-  router.post(apiRoutes.classes.collection, schoolManager, async (req, res) => {
+  router.post(apiRoutes.classes.collection, schoolManager, transactionalMutation(pool, async (req, res) => {
     const data = parse(z.object({
       name: displayNameSchema(80), grade_level: displayNameSchema(50),
       academic_year_id: publicId, capacity: z.coerce.number().int().positive().max(500),
       homeroom_teacher_id: publicId.nullable().optional()
     }), req.body);
+    const [[grade]] = await pool.execute(
+      'SELECT id FROM grades WHERE name = ? AND active = 1 AND is_deleted = 0',
+      [data.grade_level]
+    );
+    if (!grade) return res.status(400).json({ error: 'Select a grade level configured for this school' });
     data.academic_year_id = await resolvePublicId(pool, 'academic_years', data.academic_year_id, 400);
     if (data.homeroom_teacher_id) data.homeroom_teacher_id = await resolvePublicId(pool, 'teachers', data.homeroom_teacher_id, 400);
     const [[year]] = await pool.execute('SELECT id FROM academic_years WHERE id = ?', [data.academic_year_id]);
@@ -79,8 +87,8 @@ export function registerClassesRoutes(router, context) {
       [data.name, data.grade_level, data.academic_year_id, data.capacity, data.homeroom_teacher_id || null]);
     await logActivity(pool, req.session.user.internalId, 'created', 'class', result.insertId);
     res.status(201).json({ id: await publicIdFor(pool, 'classes', result.insertId) });
-  });
-  router.patch(apiRoutes.classes.item, schoolManager, async (req, res) => {
+  }));
+  router.patch(apiRoutes.classes.item, schoolManager, transactionalMutation(pool, async (req, res) => {
     const { id: publicClassId } = parse(idParam, req.params);
     const id = await resolvePublicId(pool, 'classes', publicClassId);
     const data = parse(z.object({
@@ -90,6 +98,13 @@ export function registerClassesRoutes(router, context) {
       homeroom_teacher_id: publicId.nullable().optional(),
       active: z.boolean().optional()
     }), req.body);
+    if (data.grade_level !== undefined) {
+      const [[grade]] = await pool.execute(
+        'SELECT id FROM grades WHERE name = ? AND active = 1 AND is_deleted = 0',
+        [data.grade_level]
+      );
+      if (!grade) return res.status(400).json({ error: 'Select a grade level configured for this school' });
+    }
     if (data.homeroom_teacher_id) data.homeroom_teacher_id = await resolvePublicId(pool, 'teachers', data.homeroom_teacher_id, 400);
     const fields = Object.keys(data);
     if (!fields.length) return res.status(400).json({ error: 'No class fields provided' });
@@ -98,7 +113,7 @@ export function registerClassesRoutes(router, context) {
       if (!teacher) return res.status(400).json({ error: 'Select an active homeroom teacher' });
     }
     if (data.capacity !== undefined) {
-      const [[count]] = await pool.execute('SELECT COUNT(*) AS total FROM student_enrollments WHERE class_id = ? AND current = 1', [id]);
+      const [[count]] = await pool.execute('SELECT COUNT(DISTINCT student_id) AS total FROM student_enrollments WHERE class_id = ? AND current = 1', [id]);
       if (data.capacity < count.total) return res.status(400).json({ error: `Capacity cannot be below current enrollment (${count.total})` });
     }
     try {
@@ -114,7 +129,7 @@ export function registerClassesRoutes(router, context) {
       if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Class name already exists for the academic year' });
       throw error;
     }
-  });
+  }));
   router.get(apiRoutes.classSchedules.timeSlots, academic, async (req, res) => {
     const filters = parse(z.object({ class_id: publicId }), req.query);
     const classId = await resolvePublicId(pool, 'classes', filters.class_id, 400);
@@ -136,7 +151,7 @@ export function registerClassesRoutes(router, context) {
       throw classTimeSlotError(error);
     }
   });
-  router.post(apiRoutes.classSchedules.timeSlots, schoolManager, async (req, res) => {
+  router.post(apiRoutes.classSchedules.timeSlots, schoolManager, transactionalMutation(pool, async (req, res) => {
     const data = parse(classScheduleTimeSlotInput, req.body);
     const classId = await resolvePublicId(pool, 'classes', data.class_id, 400);
     const [[classRecord]] = await pool.execute('SELECT id FROM classes WHERE id = ? AND active = 1 AND is_deleted = 0', [classId]);
@@ -152,7 +167,7 @@ export function registerClassesRoutes(router, context) {
       }
       throw classTimeSlotError(error);
     }
-  });
+  }));
   router.delete(apiRoutes.classSchedules.timeSlots, schoolManager, async (req, res) => {
     const data = parse(classScheduleTimeSlotInput, req.body);
     const classId = await resolvePublicId(pool, 'classes', data.class_id, 400);
@@ -179,6 +194,13 @@ export function registerClassesRoutes(router, context) {
       await connection.execute(`
         DELETE FROM class_schedule_time_slots WHERE class_id = ? AND start_time = ? AND end_time = ?
       `, [classId, data.start_time, data.end_time]);
+      if (req.session.user.role === 'SuperAdmin') {
+        await logActivity(connection, req.session.user.internalId, 'superadmin_action', 'system', null, {
+          summary: `SuperAdmin request: ${req.method} ${String(req.originalUrl || req.url || '').split('?')[0].slice(0, 500)}`,
+          fields: Object.keys(req.body || {})
+            .filter(field => !/(?:password|secret|token|hash|authorization|cookie)/i.test(field))
+        });
+      }
       await connection.commit();
       res.json({ success: true });
     } catch (error) {
@@ -276,7 +298,7 @@ export function registerClassesRoutes(router, context) {
     await validateClassSchedule(data, null, pool, ignoredIds);
     res.json({ valid: true });
   });
-  router.post(apiRoutes.classSchedules.collection, schoolManager, async (req, res) => {
+  router.post(apiRoutes.classSchedules.collection, schoolManager, transactionalMutation(pool, async (req, res) => {
     const data = await resolveClassScheduleIds(parse(classScheduleInput, req.body));
     await validateClassSchedule(data);
     const [result] = await pool.execute(`
@@ -287,8 +309,8 @@ export function registerClassesRoutes(router, context) {
       day_of_week: data.day_of_week, start_time: data.start_time, end_time: data.end_time, room: data.room || null
     });
     res.status(201).json({ id: await publicIdFor(pool, 'class_schedules', result.insertId) });
-  });
-  router.patch(apiRoutes.classSchedules.item, schoolManager, async (req, res) => {
+  }));
+  router.patch(apiRoutes.classSchedules.item, schoolManager, transactionalMutation(pool, async (req, res) => {
     const { id: publicScheduleId } = parse(idParam, req.params);
     const id = await resolvePublicId(pool, 'class_schedules', publicScheduleId);
     if (Object.keys(req.body).length === 1 && Object.hasOwn(req.body, 'active')) {
@@ -320,7 +342,7 @@ export function registerClassesRoutes(router, context) {
       record_before: recordBefore
     });
     res.json({ success: true });
-  });
+  }));
   router.put(apiRoutes.classSchedules.batch, schoolManager, async (req, res) => {
     const data = parse(scheduleBatchInput, req.body);
     const connection = await pool.getConnection();

@@ -3,7 +3,7 @@ import { apiRoutes } from './apiRoutes.js';
 import bcrypt from 'bcrypt';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { pool } from '../config/db.js';
+import { pool, runWithAcademicYearContext } from '../config/db.js';
 import { requireAuth, requirePasswordChanged, requireRole } from '../middleware/auth.js';
 import { expensiveLimiter, loginLimiter, sensitiveAuthLimiter, uploadLimiter } from '../middleware/rateLimit.js';
 import { logError } from '../utils/logger.js';
@@ -23,10 +23,10 @@ import dashboardRouter from './dashboard.js';
 import { registerReportsRoutes } from './reports.js';
 import { registerUsersRoutes } from './users.js';
 import { registerSchoolSetupRoutes } from './schoolSetup.js';
+import { registerAcademicYearTransitionRoutes } from './academicYearTransitions.js';
 import { academicYearInput, displayNameSchema, idParam, loginInput, parse, publicId, studentInput } from '../utils/validation.js';
 
 const router = Router();
-router.use(searchRouter);
 router.use(activityRequestContext);
 router.use(superAdminActivityAudit(pool));
 const superAdmin = requireRole('SuperAdmin');
@@ -502,11 +502,33 @@ const routeContext = {
 registerTrashRoutes(router, routeContext);
 registerAuthRoutes(router, routeContext);
 router.use(requireAuth, requirePasswordChanged);
+router.use(async (req, res, next) => {
+  const [[currentYear]] = await pool.execute(
+    'SELECT id, public_id FROM academic_years WHERE is_current = 1 LIMIT 1'
+  );
+  const requestedYearId = req.get('X-Academic-Year-Id');
+  let academicYearId = currentYear?.id || null;
+
+  if (requestedYearId) {
+    if (!['Admin', 'SuperAdmin'].includes(req.session.user.role)) {
+      if (requestedYearId !== currentYear?.public_id) {
+        return res.status(403).json({ error: 'Only administrators can switch the academic year.' });
+      }
+    } else {
+      academicYearId = await resolvePublicId(pool, 'academic_years', requestedYearId, 400);
+    }
+  }
+
+  req.academicYearId = academicYearId;
+  runWithAcademicYearContext(academicYearId, next);
+});
+router.use(searchRouter);
 registerStudentsRoutes(router, routeContext);
 registerTeachersRoutes(router, routeContext);
 registerClassesRoutes(router, routeContext);
 registerSubjectsRoutes(router, routeContext);
 registerAcademicsRoutes(router, routeContext);
+registerAcademicYearTransitionRoutes(router, routeContext);
 registerReportsRoutes(router, routeContext);
 registerUsersRoutes(router, routeContext);
 registerSchoolSetupRoutes(router, routeContext);

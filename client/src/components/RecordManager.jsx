@@ -22,7 +22,7 @@ const config = {
     endpoint: apiRoutes.classes.collection,
     itemEndpoint: apiRoutes.classes.item,
     columns: [['name', 'Class'], ['grade_level', 'Grade'], ['academic_year', 'Academic year'], ['student_count', 'Students'], ['capacity', 'Capacity'], ['homeroom_teacher', 'Homeroom teacher'], ['active', 'Status'], ['created_at', 'Created']],
-    fields: [['name', 'Class name', 'text', true], ['grade_level', 'Grade level', 'text', true], ['academic_year_id', 'Academic year', 'academic-year', true], ['capacity', 'Capacity', 'number', true], ['homeroom_teacher_id', 'Homeroom teacher', 'teacher']]
+    fields: [['name', 'Class name', 'text', true], ['grade_level', 'Grade level', 'grade-level', true], ['academic_year_id', 'Academic year', 'academic-year', true], ['capacity', 'Capacity', 'number', true], ['homeroom_teacher_id', 'Homeroom teacher', 'teacher']]
   },
   Subjects: {
     endpoint: apiRoutes.subjects.collection,
@@ -330,6 +330,10 @@ export default function RecordManager({ page, user, onError, onSuccess }) {
   const queryString = params.toString();
   const path = `${cfg.endpoint}${queryString ? `?${queryString}` : ''}`;
   const { data, error, loading, reload } = useLoad(path);
+  const timetablePath = page === 'Students' && screen?.type === 'timetable'
+    ? apiRoute(apiRoutes.students.timetable, { id: screen.row.id })
+    : null;
+  const studentTimetable = useLoad(timetablePath);
   const canEdit = (['Admin', 'SuperAdmin'].includes(user.role) ||
     user.role === 'School Manager' && ['Students', 'Teachers', 'Classes', 'Subjects', 'Users'].includes(page))
     && page !== 'Activity Logs';
@@ -345,7 +349,7 @@ export default function RecordManager({ page, user, onError, onSuccess }) {
     else counts.other += 1;
     return counts;
   }, { female: 0, male: 0, other: 0 }) : null;
-  const isFullPageScreen = ['form', 'assignment', 'detail'].includes(screen?.type);
+  const isFullPageScreen = ['form', 'assignment', 'detail', 'timetable'].includes(screen?.type);
   useEffect(() => { setCurrentPage(1); }, [debouncedQuery, status, roleFilter, gender, classFilter, subjectFilter, gradeFilter, yearFilter, teacherFilter, createdFrom, createdTo, sortOrder, page]);
   useEffect(() => {
     setStatus('');
@@ -579,7 +583,7 @@ export default function RecordManager({ page, user, onError, onSuccess }) {
           <label className="block min-w-0 text-sm font-medium text-slate-700">Grade
             <select value={gradeFilter} onChange={event => setGradeFilter(event.target.value)} className="mt-1.5 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
               <option value="">All grades</option>
-              {[...new Set((filterMeta?.classes || []).map(row => row.grade_level).filter(Boolean))].sort().map(grade => <option key={grade} value={grade}>{grade}</option>)}
+              {(filterMeta?.gradeLevels || []).map(grade => <option key={grade.id} value={grade.name}>{grade.name}</option>)}
             </select>
           </label>
           <SearchableSelect name="class_year_filter" label="Academic year" options={filterMeta?.academicYears || []} value={yearFilter} onChange={setYearFilter}
@@ -640,6 +644,7 @@ export default function RecordManager({ page, user, onError, onSuccess }) {
             </td>)}
             <td className="px-4 py-3"><div className="flex items-center gap-2 whitespace-nowrap"><ActionMenu label={`Actions for ${row.english_name || row.full_name || row.name || row.username || 'record'}`} items={[
               { label: 'View details', onClick: () => setScreen({ type: 'detail', row }) },
+              { label: 'View complete timetable', onClick: () => setScreen({ type: 'timetable', row }), visible: page === 'Students' && !row.is_deleted },
               { label: 'Edit', onClick: () => setScreen({ type: 'form', row }), visible: canEdit && !row.is_deleted },
               { label: row.account_username ? 'Regenerate account' : 'Generate account', onClick: () => setConfirmAction({ type: 'regenerate-account', row }), visible: canManageUsers && page === 'Teachers' && !row.is_deleted, variant: 'accent' },
               { label: 'Regenerate account', onClick: () => setConfirmAction({ type: 'regenerate-user-password', row }), visible: canManageUsers && page === 'Users' && !row.is_deleted && row.id !== user.id, variant: 'accent' },
@@ -672,6 +677,34 @@ export default function RecordManager({ page, user, onError, onSuccess }) {
       <div className="sims-panel">
         <RecordForm page={page} fields={formFields} initial={screen.row} onCancel={() => setScreen(null)} onError={onError} onSave={values => saveRecord(values, screen.row)} />
       </div>
+    </section>}
+    {screen?.type === 'timetable' && <section className="space-y-5">
+      <div className="flex items-center gap-3">
+        <button type="button" onClick={() => setScreen(null)} className="rounded-lg border border-slate-300 bg-white p-2 text-slate-700 hover:bg-slate-50" aria-label="Back to students"><ArrowLeft size={18} /></button>
+        <div><h2 className="text-xl font-bold text-navy">Complete student timetable</h2><p className="text-sm text-slate-500">{screen.row.english_name} · {screen.row.student_code}</p></div>
+      </div>
+      {studentTimetable.error ? <ErrorPanel message={studentTimetable.error} /> : studentTimetable.loading ? <Loading /> : <div className="space-y-4">
+        <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+          <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Main homeroom grade</p>
+          <p className="mt-1 text-lg font-bold text-blue-950">{studentTimetable.data?.main_grade || 'Not enrolled'}{studentTimetable.data?.homeroom_class ? ` · ${studentTimetable.data.homeroom_class}` : ''}</p>
+        </div>
+        <div className="sims-table-panel overflow-x-auto">
+          <table className="sims-table w-full min-w-[780px] text-left text-sm">
+            <thead className="border-b border-slate-200 text-xs uppercase"><tr>{['Enrollment', 'Grade', 'Subject', 'Class', 'Teacher', 'Day', 'Time', 'Classroom'].map(label => <th key={label} className="px-4 py-3">{label}</th>)}</tr></thead>
+            <tbody className="divide-y divide-slate-100">{(studentTimetable.data?.enrollments || []).map((item, index) => <tr key={`${item.id}-${item.schedule_id || index}`}>
+              <td className="px-4 py-3 font-semibold">{item.enrollment_type === 'Homeroom' ? 'Homeroom' : 'Subject class'}</td>
+              <td className="px-4 py-3">{item.grade_level || '—'}</td>
+              <td className="px-4 py-3">{item.subject_name || 'General class'}</td>
+              <td className="px-4 py-3">{item.class_name}</td>
+              <td className="px-4 py-3">{item.teacher_name || 'Unassigned'}</td>
+              <td className="px-4 py-3">{item.day_of_week ? ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][item.day_of_week - 1] : '—'}</td>
+              <td className="px-4 py-3">{item.start_time ? `${String(item.start_time).slice(0, 5)}–${String(item.end_time).slice(0, 5)}` : '—'}</td>
+              <td className="px-4 py-3">{item.room || '—'}</td>
+            </tr>)}</tbody>
+          </table>
+          {!studentTimetable.data?.enrollments?.length && <Empty text="No enrollments are configured for the current academic year." />}
+        </div>
+      </div>}
     </section>}
     {screen?.type === 'assignment' && <section className="space-y-5">
       <div className="flex items-center gap-3">
@@ -713,7 +746,8 @@ function RecordForm({ page, fields, initial, onCancel, onError, onSave }) {
     class: initial?.class_id || '',
     subject: initial?.subject_id || '',
     term: initial?.term_id || '',
-    'academic-year': initial?.academic_year_id || ''
+    'academic-year': initial?.academic_year_id || '',
+    'grade-level': initial?.grade_level || ''
   }));
   const [photoData, setPhotoData] = useState('');
   const [photoSource, setPhotoSource] = useState('');
@@ -739,7 +773,8 @@ function RecordForm({ page, fields, initial, onCancel, onError, onSave }) {
       class: initial?.class_id || '',
       subject: initial?.subject_id || '',
       term: initial?.term_id || '',
-      'academic-year': initial?.academic_year_id || ''
+      'academic-year': initial?.academic_year_id || '',
+      'grade-level': initial?.grade_level || ''
     });
     setFieldErrors({});
     setFormError('');
@@ -764,7 +799,7 @@ function RecordForm({ page, fields, initial, onCancel, onError, onSave }) {
     const errors = {};
     for (const [key, label, type, required] of fields) {
       if (type === 'auto-code') continue;
-      if (['teacher', 'class', 'subject', 'term', 'academic-year'].includes(type)) {
+      if (['teacher', 'class', 'subject', 'term', 'academic-year', 'grade-level'].includes(type)) {
         const selected = selectionValues[type] || (type === 'academic-year' ? meta?.academicYear?.id : '');
         const existingStudentWithoutClass = page === 'Students' && key === 'class_id' && initial && !initial.class_id;
         if (required && !selected && !existingStudentWithoutClass) errors[key] = `Select ${label.toLowerCase()}.`;
@@ -953,13 +988,20 @@ function RecordForm({ page, fields, initial, onCancel, onError, onSave }) {
     <div className="grid gap-4 sm:grid-cols-2">
       {fields.map(([key, label, type, required, options]) => {
         if (page === 'Users' && key === 'teacher_id' && roleValue !== 'Teacher') return null;
-        if (['teacher', 'class', 'subject', 'term', 'academic-year'].includes(type)) {
+        if (['teacher', 'class', 'subject', 'term', 'academic-year', 'grade-level'].includes(type)) {
           const optionSets = {
             teacher: { options: meta?.teachers || [], label: item => `${item.full_name} · ${item.teacher_code}`, placeholder: 'Search staff name or code...' },
             class: { options: meta?.classes || [], label: item => `${item.grade_level} · ${item.name}`, placeholder: 'Search class name or grade...' },
             subject: { options: meta?.subjects || [], label: item => `${item.name} · ${item.code}`, placeholder: 'Search subject name or code...' },
             term: { options: meta?.terms || [], label: item => `${item.name} · ${item.academic_year || ''}`, placeholder: 'Search term or academic year...' },
-            'academic-year': { options: meta?.academicYears || [], label: item => item.name, placeholder: 'Search academic year...' }
+            'academic-year': { options: meta?.academicYears || [], label: item => item.name, placeholder: 'Search academic year...' },
+            'grade-level': {
+              options: meta?.gradeLevels || [],
+              label: item => item.name,
+              getOptionId: item => item.name,
+              placeholder: 'Search grade levels...',
+              emptyLabel: 'No grade levels are configured for this school.'
+            }
           };
           const optionSet = optionSets[type];
           const selectedValue = selectionValues[type] || (type === 'academic-year' ? meta?.academicYear?.id || '' : '');
@@ -974,9 +1016,11 @@ function RecordForm({ page, fields, initial, onCancel, onError, onSave }) {
               setFieldErrors(current => ({ ...current, [key]: '' }));
             }}
             getOptionLabel={optionSet.label}
+            getOptionId={optionSet.getOptionId}
             getOptionDetails={item => selectDetails(type, item)}
             getOptionSearchText={item => [item.id, ...Object.values(item)].filter(Boolean).join(' ')}
             placeholder={optionSet.placeholder}
+            emptyLabel={optionSet.emptyLabel}
             required={required}
             error={fieldErrors[key] || ''}
           />;

@@ -15,7 +15,7 @@ const [{ pool }, { default: api }] = await Promise.all([
   import('../src/routes/api.js')
 ]);
 
-test('attendance supports a multi-class print query with parameterized class filters', async t => {
+test('attendance combines multi-class and multi-word student search filters', async t => {
   const classIds = [
     'c7a8a10b-d1e9-4c87-8fed-0d8c998ed4a1',
     'e190c068-0710-4301-8c28-59e20d88c790'
@@ -23,6 +23,9 @@ test('attendance supports a multi-class print query with parameterized class fil
   const originalExecute = pool.execute;
   const capturedQueries = [];
   pool.execute = async (sql, params = []) => {
+    if (sql.includes('SELECT id, public_id FROM academic_years WHERE is_current = 1 LIMIT 1')) {
+      return [[{ id: 1, public_id: 'cf4dfdf6-bae4-45de-9a5d-c2a89a80e234' }], []];
+    }
     if (sql.includes('SELECT active, is_deleted FROM users WHERE id = ?')) return [[{ active: true, is_deleted: false }], []];
     if (sql.includes('SELECT id, public_id FROM classes WHERE public_id IN')) {
       return [[{ id: 11, public_id: classIds[0] }, { id: 12, public_id: classIds[1] }], []];
@@ -59,7 +62,7 @@ test('attendance supports a multi-class print query with parameterized class fil
   });
   t.after(() => new Promise(resolve => server.close(resolve)));
 
-  const response = await fetch(`http://127.0.0.1:${server.address().port}/api/attendance?class_ids=${classIds.join(',')}&status=Absent&page=1&page_size=100`);
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/api/attendance?class_ids=${classIds.join(',')}&q=Kunthea%20Ly%20STU-2026-009&status=Absent&page=1&page_size=100`);
   assert.equal(response.status, 200, await response.clone().text());
   assert.deepEqual(await response.json(), { rows: [], total: 0, page: 1, page_size: 100 });
   assert.equal(capturedQueries.length, 2);
@@ -68,6 +71,10 @@ test('attendance supports a multi-class print query with parameterized class fil
     assert.deepEqual(params.slice(4, 6), [11, 12]);
     assert.match(sql, /ar\.status = \?/);
     assert.deepEqual(params.slice(10, 12), ['Absent', 'Absent']);
+    assert.equal((sql.match(/s\.english_name ILIKE \? OR s\.student_code ILIKE \?/g) || []).length, 3);
+    assert.deepEqual(params.slice(12, 18), [
+      '%Kunthea%', '%Kunthea%', '%Ly%', '%Ly%', '%STU-2026-009%', '%STU-2026-009%'
+    ]);
     assert.equal((sql.match(/\?/g) || []).length, params.length);
   }
 });
@@ -83,6 +90,9 @@ test('attendance status updates are audited and unchanged statuses do not create
     schedule_id: 8, attendance_date: '2026-10-29', status: 'Present', note: null
   };
   pool.execute = async (sql, params = []) => {
+    if (sql.includes('SELECT id, public_id FROM academic_years WHERE is_current = 1 LIMIT 1')) {
+      return [[{ id: 1, public_id: 'cf4dfdf6-bae4-45de-9a5d-c2a89a80e234' }], []];
+    }
     if (sql.includes('SELECT id FROM attendance_records WHERE public_id = ?')) return [[{ id: record.id }], []];
     if (sql.includes('SELECT active, is_deleted FROM users WHERE id = ?')) return [[{ active: true, is_deleted: false }], []];
     throw new Error(`Unexpected pool query in attendance status test: ${sql}`);
@@ -188,6 +198,9 @@ test('teachers can submit attendance and update only their assigned class and su
     schedule_id: 8, attendance_date: '2026-10-29', status: 'Present', note: null
   };
   pool.execute = async (sql, params = []) => {
+    if (sql.includes('SELECT id, public_id FROM academic_years WHERE is_current = 1 LIMIT 1')) {
+      return [[{ id: 1, public_id: 'cf4dfdf6-bae4-45de-9a5d-c2a89a80e234' }], []];
+    }
     if (sql.includes('SELECT id FROM attendance_records WHERE public_id = ?')) return [[{ id: record.id }], []];
     if (sql.includes('SELECT id FROM classes WHERE public_id = ?')) return [[{ id: 4 }], []];
     if (sql.includes('SELECT id FROM subjects WHERE public_id = ?')) return [[{ id: 7 }], []];

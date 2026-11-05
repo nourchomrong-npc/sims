@@ -8,14 +8,16 @@ import {
 } from '../config/db.js';
 
 const TABLES = [
-  'users', 'trash_records', 'academic_years', 'teachers', 'classes', 'students',
+  'users', 'trash_records', 'academic_years', 'teachers', 'grades', 'classes', 'students',
   'student_photos', 'terms', 'student_enrollments', 'subjects', 'teacher_assignments',
   'class_schedules', 'class_schedule_time_slots', 'attendance_records', 'assessments',
-  'student_scores', 'grading_scales', 'activity_logs'
+  'student_scores', 'grading_scales', 'academic_year_transitions',
+  'academic_year_transition_students', 'student_subject_outcomes', 'activity_logs'
 ];
 const ACTIVITY_ENTITY_TABLES = {
   user: 'users',
   academic_year: 'academic_years',
+  academic_year_transition: 'academic_year_transitions',
   student: 'students',
   teacher: 'teachers',
   class: 'classes',

@@ -14,6 +14,8 @@ export function registerReportsRoutes(router, context) {
       const scope = teacherAssignmentFilter(teacherId, 'e.class_id');
       sql = `SELECT s.student_code, s.english_name, s.gender, s.enrollment_date, s.status, c.name class_name, c.grade_level
         FROM students s LEFT JOIN student_enrollments e ON e.student_id = s.id AND e.current = 1
+          AND e.academic_year_id = (SELECT id FROM academic_years WHERE is_current = 1 LIMIT 1)
+          AND e.enrollment_type = 'Homeroom'
         LEFT JOIN classes c ON c.id = e.class_id AND c.is_deleted = 0
         WHERE s.status <> 'Archived' AND s.is_deleted = 0 ${scope.sql} ORDER BY s.enrollment_date DESC`;
       params = scope.params;
@@ -90,14 +92,17 @@ export function registerReportsRoutes(router, context) {
       const scope = teacherAssignmentFilter(teacherId, 'e.class_id');
       sql = `SELECT c.grade_level, c.name class_name, s.student_code, s.english_name, e.enrollment_date
         FROM student_enrollments e JOIN classes c ON c.id = e.class_id AND c.is_deleted = 0
-        JOIN students s ON s.id = e.student_id WHERE e.current = 1 AND s.status = 'Active' AND s.is_deleted = 0
+        JOIN students s ON s.id = e.student_id WHERE e.current = 1
+        AND e.academic_year_id = (SELECT id FROM academic_years WHERE is_current = 1 LIMIT 1)
+        AND s.status = 'Active' AND s.is_deleted = 0
+        AND e.enrollment_type = 'Homeroom'
         ${scope.sql}
         ORDER BY c.grade_level, c.name, s.english_name`;
       params = scope.params;
     } else if (type === 'enrollment-trends') {
       const scope = teacherAssignmentFilter(teacherId, 'e.class_id');
       sql = `SELECT TO_CHAR(s.enrollment_date, 'YYYY-MM') month, COUNT(DISTINCT s.id) enrollments
-        FROM students s JOIN student_enrollments e ON e.student_id = s.id AND e.current = 1 WHERE s.is_deleted = 0
+        FROM students s JOIN student_enrollments e ON e.student_id = s.id AND e.current = 1 AND e.enrollment_type = 'Homeroom' WHERE s.is_deleted = 0
         ${scope.sql}
         GROUP BY month ORDER BY month`;
       params = scope.params;

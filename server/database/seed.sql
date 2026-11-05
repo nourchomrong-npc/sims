@@ -1,6 +1,6 @@
 -- PostgreSQL development seed; apply after schema.postgres.sql.
-INSERT INTO academic_years (name, start_date, end_date, is_current) VALUES
-('2026-2027', '2026-09-01', '2027-08-31', 1)
+INSERT INTO academic_years (name, start_date, end_date, is_current, status) VALUES
+('2026-2027', '2026-09-01', '2027-08-31', 1, 'Current')
 ON CONFLICT (name) DO NOTHING;
 
 INSERT INTO terms (academic_year_id, name, start_date, end_date)
@@ -20,6 +20,12 @@ INSERT INTO teachers (teacher_code, full_name, email, phone, hire_date, employme
 ('TCH-004','Pisey Sam','pisey.sam@example.test','012-555-0104','2018-09-01','Active'),
 ('TCH-005','Vicheka Lim','vicheka.lim@example.test','012-555-0105','2022-02-01','Active')
 ON CONFLICT (teacher_code) DO NOTHING;
+
+INSERT INTO grades (name, sort_order) VALUES
+  ('Grade K', 0), ('Grade 1', 1), ('Grade 2', 2), ('Grade 3', 3), ('Grade 4', 4),
+  ('Grade 5', 5), ('Grade 6', 6), ('Grade 7', 7), ('Grade 8', 8), ('Grade 9', 9),
+  ('Grade 10', 10), ('Grade 11', 11), ('Grade 12', 12)
+ON CONFLICT DO NOTHING;
 
 INSERT INTO classes (name, grade_level, academic_year_id, capacity, homeroom_teacher_id)
 SELECT 'Grade 7A','Grade 7',ay.id,35,t.id FROM academic_years ay JOIN teachers t ON t.teacher_code='TCH-001' WHERE ay.name='2026-2027'

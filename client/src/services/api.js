@@ -15,6 +15,28 @@ export function apiAssetUrl(path) {
 const activeMutations = new Map();
 let nextMutationId = 0;
 const mutationListeners = new Set();
+const academicYearListeners = new Set();
+let activeAcademicYearId = '';
+
+function subscribeToAcademicYear(listener) {
+  academicYearListeners.add(listener);
+  return () => academicYearListeners.delete(listener);
+}
+
+function getAcademicYearSnapshot() {
+  return activeAcademicYearId;
+}
+
+export function setAcademicYearContext(academicYearId) {
+  const nextId = String(academicYearId || '');
+  if (nextId === activeAcademicYearId) return;
+  activeAcademicYearId = nextId;
+  academicYearListeners.forEach(listener => listener());
+}
+
+export function useAcademicYearContext() {
+  return useSyncExternalStore(subscribeToAcademicYear, getAcademicYearSnapshot, () => '');
+}
 
 function mutationLabel(path, method) {
   const route = path.split('?')[0].replace(/\/+$/, '');
@@ -42,6 +64,55 @@ function mutationLabel(path, method) {
   if (method === 'POST') return `Creating ${resource}…`;
   if (method === 'PATCH' || method === 'PUT') return `Updating ${resource}…`;
   return 'Processing request…';
+}
+
+function mutationNotification(path, method, error) {
+  const route = path.split('?')[0].replace(/\/+$/, '');
+  if (route.endsWith('/validate') || route.startsWith('/auth/') ||
+      /\/(?:generate-account|reset-password|regenerate-password)$/.test(route)) {
+    return null;
+  }
+  if (error) return { type: 'error', message: error.message || 'The change could not be saved.' };
+  if (/\/trash\/[^/]+\/[^/]+\/restore$|\/[^/]+\/[^/]+\/restore$/.test(route)) {
+    return { type: 'success', message: 'Record restored successfully.' };
+  }
+  if (route.startsWith('/trash/') && method === 'DELETE') {
+    return { type: 'success', message: 'Record permanently deleted.' };
+  }
+  if (/\/[^/]+\/[^/]+\/(?:delete|hide)$/.test(route)) {
+    return { type: 'success', message: 'Record moved to Trash.' };
+  }
+  if (route === apiRoutes.attendance.collection) {
+    return { type: 'success', message: 'Attendance saved successfully.' };
+  }
+  if (route === apiRoutes.scores) {
+    return { type: 'success', message: 'Student scores saved successfully.' };
+  }
+  if (route === apiRoutes.academicYears.transition) {
+    return { type: 'success', message: 'Academic year transition completed successfully.' };
+  }
+  const itemMatch = route.match(/^\/([a-z-]+)\/[^/]+$/);
+  const collectionMatch = route.match(/^\/([a-z-]+)$/);
+  const resource = (itemMatch?.[1] || collectionMatch?.[1] || 'Changes')
+    .replace(/-/g, ' ')
+    .replace(/s$/, '');
+  if (method === 'POST' && collectionMatch) {
+    return { type: 'success', message: `${resource} created successfully.` };
+  }
+  if (method === 'PATCH' || method === 'PUT') {
+    return { type: 'success', message: `${resource} updated successfully.` };
+  }
+  if (method === 'DELETE') {
+    return { type: 'success', message: `${resource} deleted successfully.` };
+  }
+  return { type: 'success', message: 'Changes saved successfully.' };
+}
+
+function notifyMutation(path, method, error) {
+  const notification = mutationNotification(path, method, error);
+  if (notification) {
+    window.dispatchEvent(new CustomEvent('sims:mutation-notice', { detail: notification }));
+  }
 }
 
 function updateMutationState() {
@@ -83,9 +154,13 @@ export async function api(path, options = {}) {
   }
   try {
     const response = await fetch(apiAssetUrl(path), {
+      ...requestOptions,
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json', ...options.headers },
-      ...requestOptions
+      headers: {
+        'Content-Type': 'application/json',
+        ...requestOptions.headers,
+        ...(activeAcademicYearId ? { 'X-Academic-Year-Id': activeAcademicYearId } : {})
+      }
     });
     let body = null;
     if (response.status !== 204) {
@@ -124,7 +199,11 @@ export async function api(path, options = {}) {
       error.code = body?.code;
       throw error;
     }
+    if (isMutation) notifyMutation(path, method);
     return body;
+  } catch (error) {
+    if (isMutation && error.name !== 'AbortError') notifyMutation(path, method, error);
+    throw error;
   } finally {
     if (mutationId !== null) {
       activeMutations.delete(mutationId);

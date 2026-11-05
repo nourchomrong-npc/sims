@@ -5,6 +5,8 @@ import pg from 'pg';
 
 const databaseModes = ['local_only', 'cloud_only', 'hybrid'];
 const requestDatabaseMode = new AsyncLocalStorage();
+const requestAcademicYear = new AsyncLocalStorage();
+const requestTransaction = new AsyncLocalStorage();
 const databaseModeAliases = {
   local: 'local_only',
   local_only: 'local_only',
@@ -130,6 +132,10 @@ export function runWithDatabaseMode(mode, callback) {
   return requestDatabaseMode.run(normalizedMode, callback);
 }
 
+export function runWithAcademicYearContext(academicYearId, callback) {
+  return requestAcademicYear.run(academicYearId || null, callback);
+}
+
 export function setDatabaseMode(mode) {
   const normalizedMode = normalizeDatabaseMode(mode);
   if (!normalizedMode) {
@@ -153,9 +159,24 @@ export function getDatabasePool(target) {
   return databaseForMode(requestDatabaseMode.getStore() || activeMode);
 }
 
+export function runWithPoolTransaction(database, connection, callback) {
+  return requestTransaction.run({ database, connection }, callback);
+}
+
+function transactionConnection(database) {
+  const transaction = requestTransaction.getStore();
+  return transaction?.database === database ? transaction.connection : null;
+}
+
 const activePgPool = {
-  query: (...args) => databaseForMode(requestDatabaseMode.getStore() || activeMode).query(...args),
-  connect: (...args) => databaseForMode(requestDatabaseMode.getStore() || activeMode).connect(...args),
+  query: (...args) => {
+    const database = databaseForMode(requestDatabaseMode.getStore() || activeMode);
+    return (transactionConnection(activePgPool) || database).query(...args);
+  },
+  connect: (...args) => {
+    const database = databaseForMode(requestDatabaseMode.getStore() || activeMode);
+    return (transactionConnection(activePgPool) || database).connect(...args);
+  },
   end: async () => {
     const distinctPools = [...new Set(Object.values(pools).filter(Boolean))];
     const results = await Promise.allSettled(distinctPools.map(database => database.end()));
@@ -225,7 +246,16 @@ function isInsert(sql) {
 }
 
 async function execute(client, sql, values = []) {
-  const query = toPostgresQuery(sql);
+  const academicYearId = requestAcademicYear.getStore();
+  const isCurrentYearLookup =
+    /^\s*SELECT\s+(?:id|academic_year_id)\s+FROM\s+academic_years\s+WHERE\s+is_current\s*=\s*1\s+LIMIT\s+1\s*;?\s*$/i.test(sql);
+  const scopedSql = academicYearId && !isCurrentYearLookup
+    ? sql.replace(
+      /SELECT\s+(?:id|academic_year_id)\s+FROM\s+academic_years\s+WHERE\s+is_current\s*=\s*1\s+LIMIT\s+1/gi,
+      `SELECT id FROM academic_years WHERE id = ${Number(academicYearId)}`
+    )
+    : sql;
+  const query = toPostgresQuery(scopedSql);
   const text = isInsert(query) && !/\bRETURNING\b/i.test(query)
     ? `${query.trim().replace(/;$/, '')} RETURNING id`
     : query;
@@ -266,9 +296,16 @@ function wrapClient(client, release) {
 }
 
 export const pool = {
-  execute: (sql, values) => execute(databaseForMode(requestDatabaseMode.getStore() || activeMode), sql, values),
-  query: (sql, values) => execute(databaseForMode(requestDatabaseMode.getStore() || activeMode), sql, values),
+  execute: (sql, values) => execute(
+    transactionConnection(pool) || databaseForMode(requestDatabaseMode.getStore() || activeMode), sql, values
+  ),
+  query: (sql, values) => execute(
+    transactionConnection(pool) || databaseForMode(requestDatabaseMode.getStore() || activeMode), sql, values
+  ),
   async getConnection() {
+    if (transactionConnection(pool)) {
+      throw new Error('Cannot open a nested database transaction');
+    }
     const client = await databaseForMode(requestDatabaseMode.getStore() || activeMode).connect();
     return wrapClient(client, () => client.release());
   },

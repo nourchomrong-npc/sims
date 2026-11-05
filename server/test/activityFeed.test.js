@@ -52,6 +52,9 @@ test('activity feed is admin-only and returns snapshots without replacing legacy
     record_label: null
   };
   pool.execute = async (sql, params = []) => {
+    if (sql.includes('SELECT id, public_id FROM academic_years WHERE is_current = 1 LIMIT 1')) {
+      return [[{ id: 1, public_id: 'cf4dfdf6-bae4-45de-9a5d-c2a89a80e234' }], []];
+    }
     if (sql.includes('SELECT active, is_deleted FROM users WHERE id = ?')) {
       return [[{ active: true, is_deleted: false }], []];
     }
