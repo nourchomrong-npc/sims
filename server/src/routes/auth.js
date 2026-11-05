@@ -1,6 +1,4 @@
 import { apiRoutes } from './apiRoutes.js';
-import { transactionalMutation } from '../utils/transactions.js';
-
 export function registerAuthRoutes(router, context) {
   const { bcrypt, z, pool, requireAuth, loginLimiter, sensitiveAuthLimiter, logActivity, resolvePublicId, idParam, loginInput, parse, publicId, superAdmin, verifyPassword, publicUser, resetUserPassword } = context;
 
@@ -75,16 +73,29 @@ export function registerAuthRoutes(router, context) {
     res.json({ success: true });
   });
   router.get(apiRoutes.auth.me, requireAuth, (req, res) => res.json({ user: publicUser(req.session.user) }));
-  router.post(apiRoutes.auth.password, sensitiveAuthLimiter, requireAuth, transactionalMutation(pool, async (req, res) => {
+  router.post(apiRoutes.auth.password, sensitiveAuthLimiter, requireAuth, async (req, res) => {
     const { new_password } = parse(z.object({
       new_password: z.string().min(12).max(200)
     }), req.body);
     const passwordHash = await bcrypt.hash(new_password, 12);
-    await pool.execute('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?', [passwordHash, req.session.user.internalId]);
-    req.session.user.must_change_password = false;
-    await logActivity(pool, req.session.user.internalId, 'password_changed', 'user', req.session.user.internalId);
-    res.json({ success: true });
-  }));
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      await connection.execute(
+        'UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?',
+        [passwordHash, req.session.user.internalId]
+      );
+      await logActivity(connection, req.session.user.internalId, 'password_changed', 'user', req.session.user.internalId);
+      await connection.commit();
+      req.session.user.must_change_password = false;
+      res.json({ success: true });
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  });
   router.post(apiRoutes.auth.passwordReset, sensitiveAuthLimiter, superAdmin, async (req, res) => {
     const { user_id } = parse(z.object({
       user_id: publicId
