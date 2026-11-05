@@ -369,7 +369,7 @@ export default function ClassSchedulePage({ user, onError, onSuccess, onDraftCha
           <SearchableSelect name="schedule_day_filter" label="Day" options={days.map((label, index) => ({ id: String(index + 1), label }))}
             value={dayFilter} onChange={setDayFilter} getOptionId={option => option.id}
             getOptionLabel={option => option.label} getOptionSearchText={option => option.label}
-            placeholder="Search days..." emptyValueLabel="All days" noneLabel="All days" debounceDelay={500} />
+            placeholder="Search days..." emptyValueLabel="All days" noneLabel="All days" debounceDelay={0} />
         </div>
         <label className="text-sm font-medium">From<input aria-label="Filter schedules ending after this time" type="time" value={timeFrom} max={timeTo || undefined} onChange={event => setTimeFrom(event.target.value)} className="mt-1 block rounded-lg border border-slate-300 bg-white px-3 py-2" /></label>
         <label className="text-sm font-medium">To<input aria-label="Filter schedules starting before this time" type="time" value={timeTo} min={timeFrom || undefined} onChange={event => setTimeTo(event.target.value)} className="mt-1 block rounded-lg border border-slate-300 bg-white px-3 py-2" /></label>

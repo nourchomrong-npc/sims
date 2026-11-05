@@ -35,8 +35,18 @@ export function registerSchoolSetupRoutes(router, context) {
     SELECT id, public_id, name, sort_order
     FROM grades
     WHERE active = 1 AND is_deleted = 0
+      AND (? IS NULL OR EXISTS (
+        SELECT 1
+        FROM teacher_assignments assigned
+        JOIN classes assigned_class ON assigned_class.id = assigned.class_id
+          AND assigned_class.active = 1 AND assigned_class.is_deleted = 0
+        WHERE assigned.teacher_id = ?
+          AND assigned.active = 1
+          AND assigned.academic_year_id = ?
+          AND assigned_class.grade_level = grades.name
+      ))
     ORDER BY sort_order, name
-    `),
+    `, [teacherId, teacherId, year?.id || 0]),
     pool.execute(`
       SELECT DISTINCT c.public_id AS class_id, s.public_id AS subject_id FROM teacher_assignments ta
       JOIN classes c ON c.id = ta.class_id AND c.active = 1 AND c.is_deleted = 0

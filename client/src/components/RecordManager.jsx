@@ -577,12 +577,10 @@ export default function RecordManager({ page, user, onError, onSuccess }) {
             placeholder="Search subjects..." emptyValueLabel="All subjects" noneLabel="All subjects" />
         </>}
         {page === 'Classes' && <>
-          <label className="block min-w-0 text-sm font-medium text-slate-700">Grade
-            <select value={gradeFilter} onChange={event => setGradeFilter(event.target.value)} className="mt-1.5 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
-              <option value="">All grades</option>
-              {(filterMeta?.gradeLevels || []).map(grade => <option key={grade.id} value={grade.name}>{grade.name}</option>)}
-            </select>
-          </label>
+          <SearchableSelect name="class_grade_filter" label="Grade" options={filterMeta?.gradeLevels || []} value={gradeFilter} onChange={setGradeFilter}
+            getOptionId={grade => grade.name} getOptionLabel={grade => grade.name}
+            getOptionSearchText={grade => grade.name} placeholder="Search grades..."
+            emptyValueLabel="All grades" noneLabel="All grades" debounceDelay={0} />
           <SearchableSelect name="class_teacher_filter" label="Homeroom teacher" options={filterMeta?.teachers || []} value={teacherFilter} onChange={setTeacherFilter}
             getOptionLabel={row => `${row.full_name} · ${row.teacher_code}`} getOptionSearchText={row => `${row.full_name} ${row.teacher_code}`}
             placeholder="Search teachers..." emptyValueLabel="All teachers" noneLabel="All teachers" />
