@@ -2,7 +2,7 @@ import { apiRoutes } from './apiRoutes.js';
 import { transactionalMutation } from '../utils/transactions.js';
 
 export function registerAcademicsRoutes(router, context) {
-  const { z, pool, logActivity, publicIdFor, publicizeRows, resolvePublicId, resolvePublicIds, displayNameSchema, idParam, parse, publicId, admin, schoolManager, academic, includeDeletedRecords, linkedTeacherId, teacherAssignmentFilter, createdAtQuery, createdAtFilter, createdAtOrder, requestedPage } = context;
+  const { z, pool, activityRecordSnapshot, logActivity, publicIdFor, publicizeRows, resolvePublicId, resolvePublicIds, displayNameSchema, idParam, parse, publicId, schoolManager, academic, includeDeletedRecords, linkedTeacherId, teacherAssignmentFilter, createdAtQuery, createdAtFilter, createdAtOrder, requestedPage } = context;
 
   router.get(apiRoutes.attendance.collection, academic, async (req, res) => {
     const filters = parse(z.object({
@@ -447,25 +447,31 @@ export function registerAcademicsRoutes(router, context) {
     `, [classId, req.academicYearId || 0, subjectId, subjectId, termId, termId, ...teacherFilter.params]);
     res.json(results);
   });
-  router.post(apiRoutes.assessments.collection, admin, transactionalMutation(pool, async (req, res) => {
-    const data = parse(z.object({
+  const assessmentInput = z.object({
       title: displayNameSchema(150), subject_id: publicId,
       class_id: publicId, term_id: publicId,
       assessment_date: z.string().date(), maximum_score: z.coerce.number().positive().max(100)
-    }), req.body);
+  });
+  async function resolveAssessmentInput(body, req) {
+    const data = parse(assessmentInput, body);
     data.subject_id = await resolvePublicId(pool, 'subjects', data.subject_id, 400);
     data.class_id = await resolvePublicId(pool, 'classes', data.class_id, 400);
     data.term_id = await resolvePublicId(pool, 'terms', data.term_id, 400);
     const [[valid]] = await pool.execute(`
-      SELECT c.academic_year_id, t.academic_year_id AS term_year, t.start_date, t.end_date, s.active AS subject_active
+      SELECT c.academic_year_id, t.academic_year_id AS term_year, t.start_date, t.end_date,
+        s.active AS subject_active, c.active AS class_active
       FROM classes c JOIN terms t ON t.id = ? JOIN subjects s ON s.id = ?
-      WHERE c.id = ?
+      WHERE c.id = ? AND c.is_deleted = 0 AND s.is_deleted = 0
     `, [data.term_id, data.subject_id, data.class_id]);
     if (!valid || String(valid.academic_year_id) !== String(req.academicYearId || 0) ||
-        String(valid.academic_year_id) !== String(valid.term_year) || !valid.subject_active ||
+        String(valid.academic_year_id) !== String(valid.term_year) || !valid.subject_active || !valid.class_active ||
         data.assessment_date < valid.start_date || data.assessment_date > valid.end_date) {
-      return res.status(400).json({ error: 'The class and term must belong to the same academic year, the subject must be active, and the assessment date must be within the term' });
+      throw Object.assign(new Error('The class and term must belong to the selected academic year, the subject and class must be active, and the assessment date must be within the term'), { status: 400 });
     }
+    return data;
+  }
+  router.post(apiRoutes.assessments.collection, schoolManager, transactionalMutation(pool, async (req, res) => {
+    const data = await resolveAssessmentInput(req.body, req);
     const teacherId = await linkedTeacherId(req);
     if (teacherId) {
       const [[assignment]] = await pool.execute(
@@ -479,7 +485,48 @@ export function registerAcademicsRoutes(router, context) {
     await logActivity(pool, req.session.user.internalId, 'created', 'assessment', result.insertId);
     res.status(201).json({ id: await publicIdFor(pool, 'assessments', result.insertId) });
   }));
-  router.post(apiRoutes.scores, admin, async (req, res) => {
+  router.patch(apiRoutes.assessments.item, schoolManager, transactionalMutation(pool, async (req, res) => {
+    const { id: assessmentPublicId } = parse(idParam, req.params);
+    const assessmentId = await resolvePublicId(pool, 'assessments', assessmentPublicId);
+    const [[existing]] = await pool.execute(`
+      SELECT id, subject_id, class_id, term_id FROM assessments
+      WHERE id = ? AND is_deleted = 0
+    `, [assessmentId]);
+    if (!existing) return res.status(404).json({ error: 'Assessment not found' });
+    const [[year]] = await pool.execute(
+      'SELECT academic_year_id FROM classes WHERE id = ?',
+      [existing.class_id]
+    );
+    if (!year || String(year.academic_year_id) !== String(req.academicYearId || 0)) {
+      return res.status(404).json({ error: 'Assessment not found in the selected academic year' });
+    }
+
+    const data = await resolveAssessmentInput(req.body, req);
+    const [[scoreLimits]] = await pool.execute(
+      'SELECT COUNT(*) AS score_count, MAX(score) AS highest_score FROM student_scores WHERE assessment_id = ?',
+      [assessmentId]
+    );
+    const changesScope = data.class_id !== existing.class_id ||
+      data.subject_id !== existing.subject_id || data.term_id !== existing.term_id;
+    if (Number(scoreLimits.score_count) > 0 && changesScope) {
+      return res.status(400).json({ error: 'Class, subject, and term cannot be changed after scores have been entered' });
+    }
+    if (scoreLimits.highest_score !== null && Number(data.maximum_score) < Number(scoreLimits.highest_score)) {
+      return res.status(400).json({ error: `Maximum score cannot be lower than an entered score (${scoreLimits.highest_score})` });
+    }
+
+    const recordBefore = await activityRecordSnapshot(pool, 'assessment', assessmentId);
+    await pool.execute(`
+      UPDATE assessments
+      SET title = ?, subject_id = ?, class_id = ?, term_id = ?, assessment_date = ?, maximum_score = ?
+      WHERE id = ? AND is_deleted = 0
+    `, [data.title, data.subject_id, data.class_id, data.term_id, data.assessment_date, data.maximum_score, assessmentId]);
+    await logActivity(pool, req.session.user.internalId, 'updated', 'assessment', assessmentId, {
+      record_before: recordBefore
+    });
+    res.json({ success: true });
+  }));
+  router.post(apiRoutes.scores, schoolManager, async (req, res) => {
     const data = parse(z.object({
       assessment_id: publicId,
       scores: z.array(z.object({ student_id: publicId, score: z.coerce.number().min(0).max(100), comment: z.string().max(255).optional().nullable() })).min(1).max(100)

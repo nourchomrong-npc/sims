@@ -55,6 +55,7 @@ export const apiRoutes = Object.freeze({
   }),
   assessments: Object.freeze({
     collection: '/assessments',
+    item: '/assessments/:id',
     scores: '/assessments/:id/scores'
   }),
   scores: '/scores',

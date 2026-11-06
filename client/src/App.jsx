@@ -1136,6 +1136,7 @@ function ResultsPage({ user, onError, onSuccess }) {
   const pageCount = Math.max(1, Math.ceil(totalAssessments / pageSize));
   const pageAssessments = assessments;
   const [formOpen, setFormOpen] = useState(false);
+  const [assessmentFormItem, setAssessmentFormItem] = useState(null);
   const [assessmentFieldErrors, setAssessmentFieldErrors] = useState({});
   const [assessmentFormError, setAssessmentFormError] = useState('');
   const [scoreOpen, setScoreOpen] = useState(false);
@@ -1162,7 +1163,7 @@ function ResultsPage({ user, onError, onSuccess }) {
   const [assessmentId, setAssessmentId] = useState('');
   const [busy, setBusy] = useState(false);
   const { data: scoreOptions } = useLoad(scoreOpen ? `${apiRoutes.assessments.collection}?options=true` : null);
-  const canManageRecords = ['Admin', 'SuperAdmin'].includes(user.role);
+  const canManageRecords = ['Admin', 'SuperAdmin', 'School Manager'].includes(user.role);
   const scoreAssessment = (scoreOptions || []).find(row => String(row.id) === assessmentId && !row.is_deleted);
   const scoreStudents = scoreAssessment
     ? (meta?.students || []).filter(student => String(student.class_id) === String(scoreAssessment.class_id))
@@ -1209,7 +1210,19 @@ function ResultsPage({ user, onError, onSuccess }) {
     setCurrentPage(1);
     setClassResultsPage(1);
   }, [classFilter, subjectFilter, termFilter]);
-  async function createAssessment(e) {
+  function openAssessmentForm(assessment = null) {
+    setAssessmentFormItem(assessment);
+    setAssessmentFieldErrors({});
+    setAssessmentFormError('');
+    setFormOpen(true);
+  }
+  function closeAssessmentForm() {
+    setFormOpen(false);
+    setAssessmentFormItem(null);
+    setAssessmentFieldErrors({});
+    setAssessmentFormError('');
+  }
+  async function saveAssessment(e) {
     e.preventDefault();
     const form = e.currentTarget;
     const formData = new FormData(form);
@@ -1228,10 +1241,15 @@ function ResultsPage({ user, onError, onSuccess }) {
     setAssessmentFormError('');
     const values = Object.fromEntries(formData);
     try {
-      await api(apiRoutes.assessments.collection, { method: 'POST', body: JSON.stringify(values) });
-      setFormOpen(false);
+      await api(assessmentFormItem
+        ? apiRoute(apiRoutes.assessments.item, { id: assessmentFormItem.id })
+        : apiRoutes.assessments.collection, {
+        method: assessmentFormItem ? 'PATCH' : 'POST',
+        body: JSON.stringify(values)
+      });
+      closeAssessmentForm();
       reload();
-      onSuccess('Assessment created.');
+      onSuccess(assessmentFormItem ? 'Assessment updated.' : 'Assessment created.');
     } catch (err) {
       const match = err.message.match(/^([a-z_]+):\s*(.+)$/i);
       if (match && ['title', 'subject_id', 'class_id', 'term_id', 'assessment_date', 'maximum_score'].includes(match[1])) {
@@ -1315,12 +1333,13 @@ function ResultsPage({ user, onError, onSuccess }) {
     <div className="flex flex-wrap justify-end gap-2">
     <PrintButton label={resultsView === 'assessments' ? 'Print assessments' : 'Print scores'}
       disabled={resultsView === 'assessments' ? printAssessmentLoading || Boolean(printAssessmentError) || !printAssessments.length : classResultsLoading || Boolean(classResultsError) || !visibleClassResults.length} />
-    {resultsView === 'assessments' && canManageRecords && <button type="button" onClick={() => setFormOpen(true)} className="primary-action flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-bold"><Plus size={16} /> Create assessment</button>}
+    {resultsView === 'assessments' && canManageRecords && <button type="button" onClick={() => openAssessmentForm()} className="primary-action flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-bold"><Plus size={16} /> Create assessment</button>}
     {resultsView === 'scores' && canManageRecords && <button type="button" onClick={() => { setAssessmentId(''); setScoreOpen(true); }} className="primary-action rounded-lg px-4 py-2.5 text-sm font-bold">Enter student scores</button>}
     </div>
   </div>
     {resultsView === 'assessments' && (error ? <div className="no-print"><ErrorPanel message={error} /></div> : loading ? <div className="no-print"><Loading /></div> : <div className="no-print sims-table-panel overflow-x-auto"><table className="sims-table w-full min-w-[850px] text-left text-sm"><thead className="border-b border-slate-200 text-xs uppercase"><tr>{assessmentColumns.map(([, label]) => <th className="px-4 py-3" key={label}>{label}</th>)}<th className="px-4 py-3">Actions</th></tr></thead><tbody className="divide-y divide-slate-100">{pageAssessments.map(row => <tr key={row.id} className="hover:bg-slate-50/70">    {assessmentColumns.map(([key]) => <td className="px-4 py-3" key={key}>{key === 'assessment_date' ? formatDate(row[key]) : key === 'created_at' ? formatDateTime(row[key]) : key === 'status' ? <StatusBadge>{row[key]}</StatusBadge> : row[key] ?? '—'}</td>)}<td className="px-4 py-3"><ActionMenu label={`Actions for ${row.title}`} items={[
       { label: 'View details', onClick: () => setSelectedAssessment(row) },
+      { label: 'Edit', onClick: () => openAssessmentForm(row), visible: canManageRecords && !row.is_deleted },
       { label: 'Delete', onClick: () => setConfirmAssessmentHide(row), visible: canManageRecords && !row.is_deleted, variant: 'danger' }
     ]} /></td></tr>)}</tbody></table>{!totalAssessments && <Empty text="No assessments have been recorded." />}<Pagination page={currentPage} pageCount={pageCount} total={totalAssessments} pageSize={pageSize} onPageChange={setCurrentPage} /></div>)}
     {resultsView === 'scores' && <section className="no-print sims-panel space-y-4">
@@ -1491,24 +1510,24 @@ function ResultsPage({ user, onError, onSuccess }) {
     </div>}
     {formOpen && <section className="space-y-5">
       <div className="flex items-center gap-3">
-        <button type="button" onClick={() => setFormOpen(false)} className="rounded-lg border border-slate-300 bg-white p-2 text-slate-700 hover:bg-slate-50" aria-label="Back to academic results"><ArrowLeft size={18} /></button>
-        <div><h2 className="text-xl font-bold text-navy">Create assessment</h2><p className="text-sm text-slate-500">Enter the assessment details below.</p></div>
+        <button type="button" onClick={closeAssessmentForm} className="rounded-lg border border-slate-300 bg-white p-2 text-slate-700 hover:bg-slate-50" aria-label="Back to academic results"><ArrowLeft size={18} /></button>
+        <div><h2 className="text-xl font-bold text-navy">{assessmentFormItem ? 'Edit assessment' : 'Create assessment'}</h2><p className="text-sm text-slate-500">Enter the assessment details below.</p></div>
       </div>
       <div className="sims-panel">
-      <form noValidate onSubmit={createAssessment} onChange={event => {
+      <form noValidate onSubmit={saveAssessment} onChange={event => {
         const key = event.target.name;
         if (key) setAssessmentFieldErrors(current => ({ ...current, [key]: '' }));
       }} className="grid gap-4 sm:grid-cols-2">
-        <AssessmentInput name="title" label="Assessment title" maxLength={inputMaxLengths.title} required error={assessmentFieldErrors.title} />
-        <AssessmentSelect name="subject_id" label="Subject" options={subjects || []} getLabel={row => row.name} error={assessmentFieldErrors.subject_id} />
-        <AssessmentSelect name="class_id" label="Class" options={meta?.classes || []} getLabel={row => row.name} error={assessmentFieldErrors.class_id} />
-        <AssessmentSelect name="term_id" label="Term" options={meta?.terms || []} getLabel={row => `${row.name} · ${row.academic_year}`} error={assessmentFieldErrors.term_id} />
-        <AssessmentInput name="assessment_date" label="Date" type="date" defaultValue={today} required error={assessmentFieldErrors.assessment_date} />
-        <AssessmentInput name="maximum_score" label="Maximum score (up to 100)" type="number" min="0.01" max="100" step="any" required error={assessmentFieldErrors.maximum_score} />
+        <AssessmentInput name="title" label="Assessment title" maxLength={inputMaxLengths.title} required defaultValue={assessmentFormItem?.title || ''} error={assessmentFieldErrors.title} />
+        <AssessmentSelect name="subject_id" label="Subject" options={subjects || []} getLabel={row => row.name} defaultValue={assessmentFormItem?.subject_id || ''} error={assessmentFieldErrors.subject_id} />
+        <AssessmentSelect name="class_id" label="Class" options={meta?.classes || []} getLabel={row => row.name} defaultValue={assessmentFormItem?.class_id || ''} error={assessmentFieldErrors.class_id} />
+        <AssessmentSelect name="term_id" label="Term" options={meta?.terms || []} getLabel={row => [row.name, meta?.academicYear?.name].filter(Boolean).join(' · ')} defaultValue={assessmentFormItem?.term_id || ''} error={assessmentFieldErrors.term_id} />
+        <AssessmentInput name="assessment_date" label="Date" type="date" defaultValue={dateInputValue(assessmentFormItem?.assessment_date) || today} required error={assessmentFieldErrors.assessment_date} />
+        <AssessmentInput name="maximum_score" label="Maximum score (up to 100)" type="number" min="0.01" max="100" step="any" defaultValue={assessmentFormItem?.maximum_score || ''} required error={assessmentFieldErrors.maximum_score} />
         {assessmentFormError && <p role="alert" className="text-sm font-medium text-red-700 sm:col-span-2">{assessmentFormError}</p>}
         <div className="flex justify-end gap-2 border-t border-slate-200 pt-4 sm:col-span-2">
-          <button type="button" onClick={() => setFormOpen(false)} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold">Cancel</button>
-          <button type="submit" className="primary-action rounded-lg px-4 py-2 text-sm font-semibold">Create assessment</button>
+          <button type="button" onClick={closeAssessmentForm} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold">Cancel</button>
+          <button type="submit" className="primary-action rounded-lg px-4 py-2 text-sm font-semibold">{assessmentFormItem ? 'Save changes' : 'Create assessment'}</button>
         </div>
       </form>
       </div>
@@ -2422,8 +2441,8 @@ function AssessmentInput({ name, label, type = 'text', required = false, default
   </div>;
 }
 
-function AssessmentSelect({ name, label, options, getLabel, error = '' }) {
-  const [value, setValue] = useState('');
+function AssessmentSelect({ name, label, options, getLabel, defaultValue = '', error = '' }) {
+  const [value, setValue] = useState(defaultValue);
   return <SearchableSelect
     name={name}
     label={label}

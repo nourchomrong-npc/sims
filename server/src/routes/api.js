@@ -561,7 +561,7 @@ registerVisibilityRoutes('students', 'students', 'student', schoolManager);
 registerVisibilityRoutes('teachers', 'teachers', 'teacher', schoolManager);
 registerVisibilityRoutes('classes', 'classes', 'class', schoolManager);
 registerVisibilityRoutes('subjects', 'subjects', 'subject', schoolManager);
-registerVisibilityRoutes('assessments', 'assessments', 'assessment', manager);
+registerVisibilityRoutes('assessments', 'assessments', 'assessment', schoolManager);
 registerVisibilityRoutes('users', 'users', 'user', superAdmin);
 registerVisibilityRoutes('class-schedules', 'class_schedules', 'class_schedule', schoolManager);
 
